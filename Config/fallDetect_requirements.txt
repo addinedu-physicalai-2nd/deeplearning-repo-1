@@ -1,0 +1,7 @@
+# fall_detector.py 실행에 필요한 패키지 (venv에서 확인된 버전으로 고정)
+numpy==2.3.5
+torch==2.14.0
+ultralytics==8.4.157
+
+# ultralytics의 종속성이라 자동으로 같이 깔리지만, 재현성을 위해 버전도 명시적으로 고정
+torchvision==0.29.0
