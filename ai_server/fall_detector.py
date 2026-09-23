@@ -29,15 +29,13 @@ fall_detector.py — 낙상 감지 AI 모듈 (판단근거 제공자)
 
 import json
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict,  field
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
-
+from config.settings import FALL_DETECTOR_MODEL
+from .data_models import RawDetection, AIOutput
 import numpy as np
 import torch
 import torch.nn as nn
-from ultralytics import YOLO
 
 # ── 모델/특징 관련 상수 ─────────────────────────────────────────────
 SEQ_LEN = 16
@@ -54,34 +52,10 @@ MODE_FALL_ONLY = 0   # 이 모듈(fall_detector)의 고정값. gait=1, stretch=2
 _PLACEHOLDER_CONFIDENCE = 1.0
 
 
-# ─────────────────────────────────────────────────────────────────
-# 출력 스키마 — 판단근거(raw data)만 담는다. state/event는 여기 없음(Main이 만듦).
-# ─────────────────────────────────────────────────────────────────
-
-@dataclass
-class RawDetection:
-    """AI가 반환하는 원본 탐지 데이터 (판단근거만, state 판정 없음)."""
-    track_id: int
-    bbox: list          # [x1, y1, x2, y2] — 현재 입력엔 bbox가 없어서 기본값 [0,0,0,0] (아래 참고)
-    raw_data: dict       # {"fall_prob": float, "confidence": float}
-
-
-@dataclass
-class AIOutput:
-    """AI 모듈의 최종 출력 (JSON 직렬화 가능)."""
-    camera_id: str
-    timestamp: str
-    mode: int = MODE_FALL_ONLY
-    detections: list = field(default_factory=list)   # list[RawDetection]
-
-
 def to_json(message) -> str:
     """dataclass 메시지(AIOutput 등)를 JSON 문자열로 직렬화."""
     return json.dumps(asdict(message), ensure_ascii=False)
 
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -101,32 +75,16 @@ class FallLSTM(nn.Module):
         out, _ = self.lstm(x)
         return self.fc(out[:, -1, :])
 
-
-def load_models(lstm_path=None, yolo_path=None, device=None, load_yolo=False):
-    """
-    fall_lstm.pt(직접 학습한 낙상 분류기)를 로드한다.
-
-    load_yolo=True로 주면 yolov8n-pose.pt도 같이 로드해서 반환하지만, 현재
-    FallDetectorSession.process_keypoints()는 keypoints를 직접 입력받으므로
-    yolo를 쓰지 않는다 — 프레임을 직접 넣는 옛 방식(process_frame)으로 되돌아갈
-    가능성을 대비해 옵션으로만 남겨둠. 기본은 False (불필요한 모델 로딩 방지).
-    """
-    base = Path(__file__).resolve().parent
-    lstm_path = Path(lstm_path) if lstm_path else base / "fall_lstm.pt"
-
+def load_models(device=None):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-
+    
+    lstm_path = FALL_DETECTOR_MODEL  
     lstm_model = FallLSTM().to(device)
     lstm_model.load_state_dict(torch.load(lstm_path, map_location=device))
     lstm_model.eval()
-
-    yolo = None
-    if load_yolo:
-        yolo_path = Path(yolo_path) if yolo_path else base / "yolov8n-pose.pt"
-        yolo = YOLO(str(yolo_path))
-
-    return yolo, lstm_model, device
+    
+    return lstm_model, device
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -185,9 +143,8 @@ class FallDetectorSession:
     EVENT 생성은 여기서 안 함 — 전부 Main Service의 정책 엔진 몫.
     """
 
-    def __init__(self, camera_id, yolo=None, lstm_model=None, device=None, fps=None):
-        self.camera_id = camera_id
-        self.yolo = yolo          # 현재 process_keypoints()는 이걸 쓰지 않음 (사용 안 함)
+    def __init__(self, camera_id, lstm_model=None, device=None, fps=None):
+        self.camera_id = camera_id         # 현재 process_keypoints()는 이걸 쓰지 않음 (사용 안 함)
         self.model = lstm_model
         self.device = device
         self.fps = fps            # 지금 로직엔 안 쓰이지만, 추후 필요해질 수 있어 남겨둠
@@ -195,13 +152,13 @@ class FallDetectorSession:
         self.tracks = {}          # track_id -> Track
         self.frame_idx = 0
 
-    def process_keypoints(self, frame_idx: int, keypoints_list) -> AIOutput:
+    def process_keypoints(self, frame_idx: int, keypoints_dict) -> AIOutput:
         """
         이미 추출된 keypoints에서 fall_prob(판단근거)만 계산한다.
 
         Args:
             frame_idx: 프레임 번호 (참고/로깅용. 시퀀스 순서는 track별 buffer가 보장)
-            keypoints_list: [(track_id, keypoints), ...] 리스트.
+            keypoints_dict: [track_id :keypoints_array, ...] 딕셔너리.
                 keypoints는 17 x 2 ([[x, y], ...]) 배열 또는 그와 동등한 리스트.
                 keypoints가 None이거나 17개 미만이면 그 track은 이번 프레임에서 건너뜀.
 
@@ -209,41 +166,40 @@ class FallDetectorSession:
             AIOutput — camera_id, timestamp, mode, detections(list[RawDetection]).
             state/event는 없음 — Main Service가 fall_prob 시계열을 보고 직접 판단.
         """
-        self.frame_idx = frame_idx
-        timestamp = _now_iso()
         detections = []
-
-        for track_id, keypoints in keypoints_list:
-            if keypoints is None or len(keypoints) < 17:
-                continue
-
-            norm_pos = normalize(keypoints).flatten().astype(np.float32)
-
-            if track_id in self.tracks:
-                track = self.tracks[track_id]
-                track.update(norm_pos)
+    
+        for track_id, keypoints in keypoints_dict.items():  
+            # keypoints normalize
+            norm_pos = normalize(keypoints)
+            
+            # Track 업데이트 또는 생성
+            if track_id not in self.tracks:
+                self.tracks[track_id] = Track(track_id, norm_pos)
             else:
-                track = Track(track_id=track_id, norm_pos=norm_pos)
-                self.tracks[track_id] = track
-
-            feat_seq = np.stack(list(track.buffer))
-            x = torch.tensor(feat_seq, dtype=torch.float32).unsqueeze(0).to(self.device)
+                self.tracks[track_id].update(norm_pos)
+            
+            # LSTM 추론
+            track = self.tracks[track_id]
+            lstm_input = np.array(list(track.buffer), dtype=np.float32)
+            
             with torch.no_grad():
-                logits = self.model(x)
-                fall_prob = torch.softmax(logits, dim=1)[0, 1].item()
-
-            detections.append(RawDetection(
+                output = self.model(torch.from_numpy(lstm_input).unsqueeze(0).to(self.device))
+                fall_prob = float(torch.softmax(output, dim=1)[0, 1].item())  # fall 확률만 추출!
+            
+            # RawDetection 생성
+            detection = RawDetection(
                 track_id=track_id,
-                bbox=[float(v) for v in track.box],
+                bbox=track.box,
                 raw_data={
-                    "fall_prob": float(fall_prob),
-                    "confidence": _PLACEHOLDER_CONFIDENCE,
-                },
-            ))
-
+                    'fall_prob': fall_prob,
+                    'confidence': _PLACEHOLDER_CONFIDENCE
+                }
+            )
+            detections.append(detection)
+        
         return AIOutput(
             camera_id=self.camera_id,
-            timestamp=timestamp,
-            mode=MODE_FALL_ONLY,
-            detections=detections,
+            timestamp=datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            mode=0,
+            detections=detections
         )
