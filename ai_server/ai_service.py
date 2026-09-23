@@ -1,5 +1,5 @@
 # ai_server/ai_service.py
-from .ai_network_manager import AINetworkManager
+from .ai_networkmanager import AINetworkManager
 from .ai_manager import AIManager
 from .yolo_pose import YOLOPoseWrapper
 from config.settings import AI_SERVER_PORT, CAMERA_PORTS
