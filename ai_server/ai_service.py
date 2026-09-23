@@ -1,11 +1,11 @@
 # ai_server/ai_service.py
 from .ai_networkmanager import AINetworkManager
 from .ai_manager import AIManager
-from .yolo_pose import YOLOPoseWrapper
 from config.settings import AI_SERVER_PORT, CAMERA_PORTS
 
 import threading
 import logging
+import time   
 
 class AIService:
     """AI 서비스 (병렬 처리)"""
@@ -50,11 +50,7 @@ class AIService:
         
         while True:
             try:
-                payload = self.net.get_frame()
-                
-                # 자신의 카메라 frame만 처리
-                if payload['camera_id'] != camera_id:
-                    continue
+                payload = self.net.get_frame(camera_id)
                 
                 mode = payload['mode']
                 frame = payload['frame']
@@ -65,6 +61,7 @@ class AIService:
                 
             except Exception as e:
                 self.logger.error(f"[{camera_id}] Error: {e}")
+                time.sleep(0.1)
 
 if __name__ == '__main__':
     service = AIService()
