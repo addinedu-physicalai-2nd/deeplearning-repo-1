@@ -13,8 +13,6 @@ class AIService:
     def __init__(self, device='cuda'):
         self.net = AINetworkManager(udp_port=AI_SERVER_PORT)
         
-        # YOLOPose는 1번만 생성해서 모든 AIManager가 공유
-        self.yolo_pose = YOLOPoseWrapper(device=device)
         
         self.ai_managers = {}
         self.device = device
@@ -31,7 +29,6 @@ class AIService:
         for camera_id in CAMERA_PORTS.keys():
             ai_mgr = AIManager(
                 camera_id=camera_id,
-                yolo_pose=self.yolo_pose,  # ← 공유!
                 device=self.device
             )
             self.ai_managers[camera_id] = ai_mgr

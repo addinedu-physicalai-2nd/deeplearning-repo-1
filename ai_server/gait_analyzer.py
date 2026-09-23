@@ -3,11 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from datetime import datetime
 from collections import deque
-from typing import List, Dict, Any
 from config.settings import MODEL_DIR
-from data_models import RawDetection, AIOutput
+from .data_models import RawDetection
 
 # ==========================================
 # 1. LSTM 딥러닝 모델 아키텍처
@@ -60,6 +58,7 @@ def normalize(kpts: np.ndarray) -> np.ndarray:
     """
     17x2 형태의 픽셀 좌표를 골반 중심으로 0~1 스케일로 정규화
     """
+    kpts = np.asarray(kpts, dtype=np.float32)
     pelvis = (kpts[11] + kpts[12]) / 2.0
     centered_kpts = kpts - pelvis
     
@@ -82,9 +81,8 @@ class GaitAnalyzerSession:
         self.fps = fps
         self.sequence_buffers = {}
 
-    def process_keypoints(self, keypoints_dict: dict) -> AIOutput:
+    def process_keypoints(self,frame_idx:int, keypoints_dict: dict) -> list:
         detections = []
-        current_time = datetime.now().isoformat()
         
         active_tracks = set(keypoints_dict.keys())
         for track_id in list(self.sequence_buffers.keys()):
@@ -92,6 +90,7 @@ class GaitAnalyzerSession:
                 del self.sequence_buffers[track_id]
         
         for track_id, kpts in keypoints_dict.items():
+            kpts = np.asarray(kpts, dtype=np.float32)
             if track_id not in self.sequence_buffers:
                 self.sequence_buffers[track_id] = deque(maxlen=WINDOW_SIZE)
                 
@@ -104,7 +103,9 @@ class GaitAnalyzerSession:
             ]
             
             if len(self.sequence_buffers[track_id]) == WINDOW_SIZE:
-                input_tensor = torch.tensor([list(self.sequence_buffers[track_id])], dtype=torch.float32).to(self.device)
+                input_tensor = torch.from_numpy(
+                    np.stack(self.sequence_buffers[track_id])
+                ).unsqueeze(0).to(self.device)
                 
                 raw_probs = {}
                 with torch.no_grad():
@@ -132,9 +133,4 @@ class GaitAnalyzerSession:
                 )
                 detections.append(detection)
         
-        return AIOutput(
-            camera_id=self.camera_id,
-            timestamp=current_time,
-            mode=1,
-            detections=detections
-        )
+        return detections

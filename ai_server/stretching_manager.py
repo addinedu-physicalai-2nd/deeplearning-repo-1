@@ -1,8 +1,6 @@
 # ai_server/stretching_manager.py
 import numpy as np
-from .data_models import AIOutput, RawDetection
-from datetime import datetime
-from dataclasses import asdict
+from .data_models import  RawDetection
 
 class StretchingManager:
     """
@@ -23,7 +21,7 @@ class StretchingManager:
         self.arm_points = (9, 10)  # 손목
         self.leg_points = (15, 16)  # 발목
     
-    def process_keypoints(self, frame_idx: int, keypoints_dict) -> AIOutput:
+    def process_keypoints(self, frame_idx: int, keypoints_dict) -> list:
         """
         사용자 keypoints 가공 (정규화 + feature 추출)
         
@@ -57,12 +55,7 @@ class StretchingManager:
         
         self.frame_idx += 1
         
-        return AIOutput(
-            camera_id=self.camera_id,
-            timestamp=datetime.now().isoformat(),
-            mode=self.MODE_STRETCHING,
-            detections=detections
-        )
+        return detections
     
     def _normalize_keypoints(self, keypoints):
         """신체 중심 기준 정규화 (어깨 중심)"""

@@ -32,7 +32,7 @@ from collections import deque
 from dataclasses import asdict,  field
 from datetime import datetime, timezone
 from config.settings import FALL_DETECTOR_MODEL
-from .data_models import RawDetection, AIOutput
+from .data_models import RawDetection
 import numpy as np
 import torch
 import torch.nn as nn
@@ -101,7 +101,7 @@ def normalize(kpts):
     scale = np.linalg.norm(sh_mid - hip_mid)
     if scale < 1e-6:
         scale = 1e-6
-    return (kpts - hip_mid) / scale
+    return ((kpts - hip_mid) / scale).flatten() 
 
 
 class Track:
@@ -152,7 +152,7 @@ class FallDetectorSession:
         self.tracks = {}          # track_id -> Track
         self.frame_idx = 0
 
-    def process_keypoints(self, frame_idx: int, keypoints_dict) -> AIOutput:
+    def process_keypoints(self, frame_idx: int, keypoints_dict) -> list:
         """
         이미 추출된 keypoints에서 fall_prob(판단근거)만 계산한다.
 
@@ -197,9 +197,4 @@ class FallDetectorSession:
             )
             detections.append(detection)
         
-        return AIOutput(
-            camera_id=self.camera_id,
-            timestamp=datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-            mode=0,
-            detections=detections
-        )
+        return detections
