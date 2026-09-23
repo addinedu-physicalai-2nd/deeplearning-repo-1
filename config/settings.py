@@ -24,3 +24,6 @@ GUI_INFO_PORT = 9999
 YOLO_POSE_MODEL = 'ai_server/models/yolov8n-pose.pt'
 FALL_DETECTOR_MODEL = 'ai_server/models/fall_lstm.pt'
 GAIT_ANALYZER_MODEL = 'ai_server/models/gait_lstm.pt'
+MODEL_DIR = 'ai_server/models'
+
+
