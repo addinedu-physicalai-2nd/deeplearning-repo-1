@@ -3,9 +3,17 @@ import numpy as np
 class StretchingAnalyzer:
     """Main - 기준 자세와 비교 후 GUI 데이터 생성"""
     
-    def __init__(self, reference_poses):
-        """reference_poses: list of {'original': keypoints, 'confidence': [...]}"""
-        self.reference_poses = reference_poses
+    def __init__(self, reference_data):
+        """
+        reference_data: {
+            "movement_name": "...",
+            "skeletons": [
+                {"frame_index": 395, "keypoints": [[x,y], ...], "confidence": [0.99, ...]},
+                ...
+            ]
+        }
+        """
+        self.skeletons = reference_data['skeletons']
     
     def analyze(self, aioutput: dict):
         """AIOutput (dict 형식) → GUI 데이터"""
@@ -13,11 +21,17 @@ class StretchingAnalyzer:
         frame_idx = aioutput['frame_idx']
         detections = aioutput['detections']
         
-        if frame_idx >= len(self.reference_poses):
+        # frame_idx에 해당하는 skeleton 찾기
+        ref_skeleton = None
+        for skeleton in self.skeletons:
+            if skeleton['frame_index'] == frame_idx:
+                ref_skeleton = skeleton
+                break
+        
+        if ref_skeleton is None:
             return {'frame_idx': frame_idx, 'tracking_data': {}}
         
-        ref_data = self.reference_poses[frame_idx]
-        ref_kp = np.array(ref_data['original'], dtype=np.float32)
+        ref_kp = np.array(ref_skeleton['keypoints'], dtype=np.float32)
         
         tracking_data = {}
         
