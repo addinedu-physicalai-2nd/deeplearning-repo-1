@@ -74,7 +74,9 @@ class AIManager:
     
     def process_frame(self, frame: np.ndarray) -> str:
         """frame 처리 → JSON 반환"""
-        keypoints_dict = self.yolo_pose.detect(frame)
+        yolo_result = self.yolo_pose.detect(frame)  
+        keypoints_dict = yolo_result['keypoints']
+        bbox_dict = yolo_result['bbox']
 
         # 사람이 없는 프레임도 번호는 증가
         frame_idx = self.frame_idx
@@ -85,15 +87,15 @@ class AIManager:
         if keypoints_dict:
             # 모드별로 하나의 모듈만 실행
             if self.current_mode == self.MODE_FALL_ONLY:
-                detections = self.fall_detector.process_keypoints(frame_idx, keypoints_dict)
+                detections = self.fall_detector.process_keypoints(keypoints_dict, bbox_dict)
 
             elif self.current_mode == self.MODE_FALL_GAIT:
-                detections = self.gait_analyzer.process_keypoints(frame_idx, keypoints_dict)
+                detections = self.gait_analyzer.process_keypoints(keypoints_dict, bbox_dict)
 
             elif self.current_mode == self.MODE_FALL_STRETCH:
-                detections = self.stretching_mgr.process_keypoints(frame_idx, keypoints_dict)
+                detections = self.stretching_mgr.process_keypoints(keypoints_dict, bbox_dict)
 
-        return self._make_output(detections,frame_idx)
+        return self._make_output(detections, frame_idx) 
     
     def _make_output(self, detections: list, frame_idx) -> str:
         output = AIOutput(

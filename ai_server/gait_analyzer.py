@@ -7,6 +7,7 @@ from datetime import datetime
 from collections import deque
 from dataclasses import dataclass
 from typing import List, Dict, Any
+from config.settings import MODEL_DIR
 
 # ==========================================
 # 0. 데이터 입출력 구조체 정의
@@ -41,7 +42,6 @@ class GaitLSTM(nn.Module):
 # 2. 글로벌 설정 및 유틸리티 함수
 # ==========================================
 TARGET_DISEASES = ['normal', 'parkinsons', 'stroke', 'antalgic', 'myopathic', 'abnormal']
-MODEL_DIR = 'ai_server/models'
 WINDOW_SIZE = 30
 
 def load_models(device=None):

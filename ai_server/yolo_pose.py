@@ -45,7 +45,7 @@ class YOLOPoseWrapper:
 
                 if keypoints.shape == (17, 2):
                     keypoints_dict[track_id] = keypoints.astype(np.float32)
-                    bbox_dict[track_id] = bbox.astype(np.float32)
+                    bbox_dict[track_id] = bbox.tolist()
 
         return {
             'keypoints': keypoints_dict,
