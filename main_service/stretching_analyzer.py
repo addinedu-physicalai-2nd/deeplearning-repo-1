@@ -1,4 +1,6 @@
 import numpy as np
+from dataclasses import asdict
+from ai_server.data_models import AIOutput
 
 class StretchingAnalyzer:
     """Main - 기준 자세와 비교 후 GUI 데이터 생성"""
@@ -7,8 +9,12 @@ class StretchingAnalyzer:
         """reference_poses: list of {'original': keypoints, 'confidence': [...]}"""
         self.reference_poses = reference_poses
     
-    def analyze(self, detections, frame_idx):
-        """AIOutput detections + frame_idx → GUI 데이터"""
+    def analyze(self, aioutput):
+        """AIOutput (dict 형식) → GUI 데이터"""
+        if isinstance(aioutput, AIOutput):
+            aioutput = asdict(aioutput)
+        frame_idx = aioutput['frame_idx']
+        detections = aioutput['detections']
         
         if frame_idx >= len(self.reference_poses):
             return {'frame_idx': frame_idx, 'tracking_data': {}}
@@ -25,6 +31,7 @@ class StretchingAnalyzer:
             
             user_limb_angles = raw_data['limb_angles']
             user_spread_distances = raw_data['spread_distances']
+            keypoints_drawn = raw_data['keypoints']
             confidence = raw_data['confidence']
             
             # ============ 기준 자세의 각도/거리 ============
@@ -105,7 +112,7 @@ class StretchingAnalyzer:
                 'spreads': spreads_data,
                 'joint_accuracy': joint_accuracy,
                 'bbox': bbox,
-                'keypoints_drawn': raw_data['keypoints'],
+                'keypoints_drawn': keypoints_drawn,
                 'confidence': float(confidence)
             }
         
