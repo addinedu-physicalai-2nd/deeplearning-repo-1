@@ -168,7 +168,10 @@ class FallDetectorSession:
         """
         detections = []
     
-        for track_id, keypoints in keypoints_dict.items():  
+        for track_id, keypoints in keypoints_dict.items():
+            if keypoints is None or len(keypoints) < 17:
+                continue
+            
             # keypoints normalize
             norm_pos = normalize(keypoints)
             
