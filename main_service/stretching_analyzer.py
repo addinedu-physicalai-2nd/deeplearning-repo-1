@@ -1,6 +1,4 @@
 import numpy as np
-from dataclasses import asdict
-from ai_server.data_models import AIOutput
 
 class StretchingAnalyzer:
     """Main - 기준 자세와 비교 후 GUI 데이터 생성"""
@@ -9,10 +7,9 @@ class StretchingAnalyzer:
         """reference_poses: list of {'original': keypoints, 'confidence': [...]}"""
         self.reference_poses = reference_poses
     
-    def analyze(self, aioutput):
+    def analyze(self, aioutput: dict):
         """AIOutput (dict 형식) → GUI 데이터"""
-        if isinstance(aioutput, AIOutput):
-            aioutput = asdict(aioutput)
+        
         frame_idx = aioutput['frame_idx']
         detections = aioutput['detections']
         
