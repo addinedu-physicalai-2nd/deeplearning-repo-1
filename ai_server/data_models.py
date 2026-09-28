@@ -14,6 +14,7 @@ class AIOutput:
     """AI 모듈의 최종 출력"""
     camera_id: str
     timestamp: str
+    frame_idx: int
     mode: int = 0
     detections: list = field(default_factory=list)
     

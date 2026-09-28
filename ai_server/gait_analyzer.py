@@ -88,7 +88,7 @@ class GaitAnalyzerSession:
         # 🔥 추가: 개별 인원(track_id)의 누적 확률을 기록할 딕셔너리 추가
         self.history_probs = {}
 
-    def process_keypoints(self, keypoints_dict: dict) -> List[RawDetection]:
+    def process_keypoints(self, keypoints_dict: dict, bbox_dict: dict) -> List[RawDetection]:
         detections = []
         
         # 1. 화면에서 이탈한 객체의 메모리 및 누적 데이터 정리
@@ -109,10 +109,7 @@ class GaitAnalyzerSession:
             norm_kpts = normalize(kpts)
             self.sequence_buffers[track_id].append(norm_kpts)
             
-            bbox = [
-                float(np.min(kpts[:, 0])), float(np.min(kpts[:, 1])),
-                float(np.max(kpts[:, 0])), float(np.max(kpts[:, 1]))
-            ]
+            bbox = bbox_dict[track_id] 
             
             # 3. 30프레임 도달 시 추론 및 실시간/누적 확률 계산
             if len(self.sequence_buffers[track_id]) == WINDOW_SIZE:

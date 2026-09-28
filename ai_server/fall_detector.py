@@ -152,7 +152,7 @@ class FallDetectorSession:
         self.tracks = {}          # track_id -> Track
         self.frame_idx = 0
 
-    def process_keypoints(self, frame_idx: int, keypoints_dict) -> list:
+    def process_keypoints(self, keypoints_dict, bbox_dict) -> list:
         """
         이미 추출된 keypoints에서 fall_prob(판단근거)만 계산한다.
 
@@ -192,7 +192,7 @@ class FallDetectorSession:
             # RawDetection 생성
             detection = RawDetection(
                 track_id=track_id,
-                bbox=track.box,
+                bbox=bbox_dict[track_id],
                 raw_data={
                     'fall_prob': fall_prob,
                     'confidence': _PLACEHOLDER_CONFIDENCE

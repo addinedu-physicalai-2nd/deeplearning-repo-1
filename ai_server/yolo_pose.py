@@ -14,7 +14,7 @@ class YOLOPoseWrapper:
         self.device = device
         self.conf_threshold = 0.5
 
-    def detect(self, frame: np.ndarray) -> Dict[int, np.ndarray]:
+    def detect(self, frame: np.ndarray)  -> Dict[str, Dict[int, np.ndarray]]:
         """
         영상에서 사람 탐지 + 추적 후 keypoints 추출 (정규화 없음)
 
@@ -27,6 +27,7 @@ class YOLOPoseWrapper:
         """
         results = self.model.track(frame, persist=True, conf=self.conf_threshold,device=self.device, verbose=False)
         keypoints_dict = {}
+        bbox_dict = {}
 
         for result in results:
             if result.boxes is None or result.keypoints is None:
@@ -37,11 +38,16 @@ class YOLOPoseWrapper:
                 continue
 
             keypoints_array = result.keypoints.xy.cpu().numpy()
+            boxes_array = result.boxes.xyxy.cpu().numpy()  # [x1, y1, x2, y2]
 
-            for track_id, keypoints in zip(track_ids, keypoints_array):
+            for track_id, keypoints, bbox in zip(track_ids, keypoints_array, boxes_array):
                 track_id = int(track_id)
 
                 if keypoints.shape == (17, 2):
                     keypoints_dict[track_id] = keypoints.astype(np.float32)
+                    bbox_dict[track_id] = bbox.astype(np.float32)
 
-        return keypoints_dict
+        return {
+            'keypoints': keypoints_dict,
+            'bbox': bbox_dict
+    }

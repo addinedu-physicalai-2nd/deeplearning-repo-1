@@ -93,12 +93,13 @@ class AIManager:
             elif self.current_mode == self.MODE_FALL_STRETCH:
                 detections = self.stretching_mgr.process_keypoints(frame_idx, keypoints_dict)
 
-        return self._make_output(detections)
+        return self._make_output(detections,frame_idx)
     
-    def _make_output(self, detections: list) -> str:
+    def _make_output(self, detections: list, frame_idx) -> str:
         output = AIOutput(
             camera_id=self.camera_id,
             timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            frame_idx = frame_idx,
             mode=self.current_mode,
             detections=detections
         )

@@ -21,16 +21,16 @@ class StretchingManager:
         self.arm_points = (9, 10)  # 손목
         self.leg_points = (15, 16)  # 발목
     
-    def process_keypoints(self, frame_idx: int, keypoints_dict) -> list:
+    def process_keypoints(self, keypoints_dict, bbox_dict) -> list:
         """
         사용자 keypoints 가공 (정규화 + feature 추출)
         
         Args:
-            frame_idx: 프레임 번호
             keypoints_dict: {track_id: keypoints_array (17x2), ...}
+            bbox_dict: {track_id: bbox [x1, y1, x2, y2], ...}
         
         Returns:
-            AIOutput (mode=2, detections=[RawDetection])
+            [RawDetection]
         """
         detections = []
         
@@ -44,7 +44,7 @@ class StretchingManager:
                 
                 detection = RawDetection(
                     track_id=track_id,
-                    bbox=[0, 0, 0, 0],
+                    bbox=bbox_dict[track_id],
                     raw_data=features
                 )
                 detections.append(detection)
@@ -52,8 +52,6 @@ class StretchingManager:
             except Exception as e:
                 print(f"[StretchingManager] Error processing track {track_id}: {e}")
                 continue
-        
-        self.frame_idx += 1
         
         return detections
     
