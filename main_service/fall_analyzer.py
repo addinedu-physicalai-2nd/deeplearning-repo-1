@@ -1,10 +1,10 @@
 """
-fall_judge.py — Main Service 낙상 판단 로직
+fall_analyzer.py — Main Service 낙상 판단 로직
 
 Main Service가 HTTP POST body로 AIOutput을 받으면, 웹 프레임워크(Flask/FastAPI 등)가
 이미 JSON을 dict로 파싱해서 넘겨준다. 그래서 이 모듈은 JSON 문자열이 아니라
 이미 파싱된 dict(ai_output)를 받는다 — stretching_analyzer.py의
-analyze(aioutput: dict)와 같은 컨벤션.
+StretchingAnalyzer.analyze(aioutput: dict)와 같은 컨벤션(클래스/메서드 이름까지 통일).
 """
 
 from collections import deque
@@ -77,11 +77,13 @@ def state_to_color(state: str) -> str:
     return STATE_COLOR.get(state, "none")
 
 
-class FallJudgeService:
+class FallAnalyzer:
+    """Main Service가 쓸 낙상 판단 모듈 — StretchingAnalyzer와 같은 패턴."""
+
     def __init__(self):
         self.tracks: dict[tuple[str, int], TrackState] = {}
 
-    def process(self, ai_output: dict) -> dict | None:
+    def analyze(self, ai_output: dict) -> dict | None:
         if ai_output.get("mode") != 0:
             return None
 
