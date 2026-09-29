@@ -26,11 +26,10 @@
   3) main_server에 start_stretching 명령(기준 자세 JSON 절대경로 포함)을 보낸다.
   4) 우측 영상에는 그 환자의 실시간 카메라 영상(거울처럼 좌우 반전) + 부위별 색이
      입혀진 스켈레톤 + 판정 뱃지를 보여준다.
-  5) 좌측 기준 영상이 끝나는 순간, 서버 응답을 기다리지 않고 우측 화면을 즉시
-     멈추고 검정 결과 화면(코스 이름 + 평균 점수)으로 바꾼다 (_finish_session 참고).
 """
 import os
 import re
+import time
 
 import cv2
 
@@ -46,6 +45,26 @@ SKELETON_SUFFIX = '_skeleton.json'
 
 # 보행 탭(480x360)보다 크게 — 좌우 영상이 화면의 실질적인 주인공이므로.
 VIEW_W, VIEW_H = 560, 420
+
+# 좌측 기준 영상이 끝난 뒤 우측 화면을 검정으로 잠그기까지 주는 여유 시간(ms).
+# 좌측 영상 재생 타이머와 실제 카메라→서버→GUI 파이프라인은 서로 다른 시계라서,
+# 좌측이 끝났다고 곧바로 우측을 잠그면 그 순간 네트워크상에 아직 날아오던(또는
+# result_queue에 대기 중이던) 마지막 프레임 몇 개가 통째로 버려진다("프레임 드랍").
+# 그렇다고 서버의 세션 종료 메시지를 기다리면 왕복 지연 때문에 싱크가 눈에 보이게
+# 어긋난다. 그래서 그 사이 절충으로, 짧게(사람 눈엔 거의 동시로 보이는 정도) 여유를
+# 주고 그 안에 들어오는 프레임은 정상적으로 처리한 뒤에만 잠근다.
+FINISH_GRACE_MS = 300
+
+# on_session_end 메시지가 "이번(현재) 세션" 것인지 "이전 세션의 뒤늦은 메시지"인지
+# 구분할 방법이 메시지 자체엔 없다(세션 구분용 id가 없음). 그런데 좌측 영상이 끝나서
+# 로컬에서 먼저 얼어붙은 뒤, 사용자가 곧바로 "시작"을 눌러 새 세션을 시작해버리면,
+# 그 직후에 "이전 세션"의 종료 메시지가 뒤늦게 도착해서 방금 막 시작한 새 세션의
+# 화면을 다시 검정으로 얼려버리는 문제가 생긴다(요청하신 "다음 영상 재생해도 검은
+# 화면" 버그의 원인). 실제 스트레칭 한 세션은 최소 몇 초~몇 분이 걸리므로, 새
+# 세션을 시작한 지 이 시간 안에 도착한 종료 메시지는 "이전 세션의 뒤늦은 메시지"로
+# 보고 무시한다. (완벽한 방법은 서버가 세션 id를 같이 보내주는 것이지만, 프로토콜을
+# 임의로 바꾸지 않기 위해 일단 이 방식으로 처리한다.)
+STALE_END_GUARD_SEC = 2.0
 
 
 def list_courses(stretch_dir):
@@ -104,9 +123,26 @@ class StretchingTab(QWidget):
         # 기다리지 않고 이걸로 즉시 평균을 내서 우측 화면에 보여준다(동기화 목적).
         self.score_history = []
         self.active_course_label = None
+        # "몇 번째 세션인지" 세는 값. start_video()를 누를 때마다 하나씩 증가한다.
+        # 그레이스 타이머(finish_timer)나 뒤늦게 도착한 on_session_end가 "지금 이미
+        # 새로 시작된 세션"을 잘못 얼려버리는 걸 막는 용도(아래 pending_finish_gen /
+        # finished_gen 참고).
+        self.session_gen = 0
+        # _finish_session이 실제로 실행돼서 화면을 얼린 세션의 session_gen 값.
+        # 아직 한 번도 얼린 적 없으면 None.
+        self.finished_gen = None
+        self.session_start_time = 0.0
         self.ref_cap = None
         self.ref_timer = QTimer()
         self.ref_timer.timeout.connect(self._next_ref_frame)
+        # 좌측 영상이 끝난 뒤 FINISH_GRACE_MS만큼만 기다렸다가 우측을 잠근다
+        # (_next_ref_frame / _on_finish_timer / _finish_session 참고).
+        self.finish_timer = QTimer()
+        self.finish_timer.setSingleShot(True)
+        self.finish_timer.timeout.connect(self._on_finish_timer)
+        # finish_timer가 걸려 있는 동안(그레이스 기간) 그게 어느 세션 것인지 기억
+        # — 타이머가 울릴 때 지금 세션이 그때와 같은지 확인하기 위함.
+        self.pending_finish_gen = None
 
         self.courses = list_courses(stretch_dir)
         self.patients = []          # main_server 연결 후 app.py가 set_patients()로 채움
@@ -233,14 +269,29 @@ class StretchingTab(QWidget):
         검정 결과 화면으로 바꾸는 '트리거'는 이제 이 메서드가 아니라 좌측 기준
         영상이 끝나는 순간(_next_ref_frame)이다 — 서버가 이 메시지를 보내기까지
         약간의 왕복 지연이 있으면 "좌측 영상 끝남"과 "우측 화면이 검정으로 바뀜"
-        사이에 눈에 보이는 시차(요청하신 싱크 안 맞는 문제)가 생기기 때문. 그래서
-        이 메서드는 이미 멈춰있는 화면의 점수를, 서버가 계산한 더 정확한 평균으로
-        다시 한 번 갱신만 해준다(로컬 프레임 평균은 근사값이라 서버 값이 오면
-        그걸로 교체). 아직 영상이 안 끝났는데 서버가 먼저 종료를 알리는 경우에도
-        대비해 _finish_session을 그대로 호출한다."""
+        사이에 눈에 보이는 시차(요청하신 싱크 안 맞는 문제)가 생기기 때문.
+
+        이 메시지에는 어느 세션인지 구분할 id가 없어서, 아래 두 경우를
+        session_gen/finished_gen/session_start_time으로 구분해서 처리한다:
+          1) 이미 이번 세션(session_gen)을 로컬에서 얼려둔 상태 → 서버가 계산한
+             더 정확한 평균으로 점수 텍스트만 갱신한다(로컬 평균은 근사값).
+          2) 아직 안 얼린 상태에서 도착 → 정상적으로는 "좌측 영상이 끝나기 전에
+             서버가 먼저 세션 종료를 판단한 경우"이므로 지금 바로 얼린다. 다만
+             방금(STALE_END_GUARD_SEC 이내) 새 세션을 시작했다면, 이건 그 새
+             세션이 아니라 "이전 세션의 뒤늦은 종료 메시지"일 가능성이 훨씬 크므로
+             무시한다 — 안 그러면 막 시작한 새 세션 화면이 다시 검정으로
+             얼어붙어버린다(다음 영상을 틀어도 검정 화면만 나오는 버그)."""
         if msg.get('camera_id') != self.active_camera_id:
             return
-        self._finish_session(msg.get('avg_score'))
+        avg_score = msg.get('avg_score')
+        if self.finished_gen == self.session_gen:
+            self._apply_final_score(avg_score)
+            return
+        if time.monotonic() - self.session_start_time < STALE_END_GUARD_SEC:
+            # 새 세션을 시작한 지 얼마 안 됐는데 도착한 종료 메시지 — 이전 세션의
+            # 뒤늦은 메시지로 보고 무시한다.
+            return
+        self._finish_session(avg_score)
 
     def _finish_session(self, avg_score=None):
         """우측 '실시간 카메라' 화면을 멈추고 검정 결과 화면으로 바꾼다.
@@ -248,10 +299,28 @@ class StretchingTab(QWidget):
         받은 프레임별 점수(self.score_history)의 평균으로 대신한다 — 그래야 서버
         응답을 기다리지 않고 좌측 영상이 끝나는 즉시 화면을 바꿀 수 있다."""
         self.session_ended = True
+        self.finished_gen = self.session_gen
         if avg_score is None and self.score_history:
             avg_score = sum(self.score_history) / len(self.score_history)
         result_view = draw_session_result(VIEW_W, VIEW_H, avg_score, self.active_course_label)
         self.my_view.setPixmap(to_pixmap(result_view))
+
+    def _apply_final_score(self, avg_score):
+        """이미 검정 결과 화면으로 얼어붙은 뒤, 서버의 최종 평균 점수로 화면
+        텍스트만 다시 그린다. session_ended/finished_gen 등 상태는 건드리지 않는다."""
+        if avg_score is None:
+            return
+        result_view = draw_session_result(VIEW_W, VIEW_H, avg_score, self.active_course_label)
+        self.my_view.setPixmap(to_pixmap(result_view))
+
+    def _on_finish_timer(self):
+        """FINISH_GRACE_MS 대기가 끝나면 호출된다. 그 사이에 이미 (a) 새 세션이
+        시작됐거나(session_gen이 그때와 달라짐) (b) on_session_end가 먼저 도착해서
+        이미 얼어붙은 상태라면, 지금 다시 얼릴 필요가 없으므로 아무것도 안 한다."""
+        if self.pending_finish_gen != self.session_gen:
+            return
+        if not self.session_ended:
+            self._finish_session()
 
     def _course_by_id(self, course_id):
         for course in self.courses:
@@ -274,6 +343,10 @@ class StretchingTab(QWidget):
         self.session_ended = False   # 새로 시작 → 이전 세션의 검정 결과 화면 고정 해제
         self.score_history = []
         self.active_course_label = course['label']
+        self.session_gen += 1        # 새 세션 번호 — 이전 세션의 그레이스 타이머/
+        self.finished_gen = None     # 뒤늦은 종료 메시지가 지금 세션을 잘못 얼리지 못하게
+        self.session_start_time = time.monotonic()
+        self.finish_timer.stop()     # 혹시 이전 세션의 그레이스 타이머가 아직 돌고 있다면 취소
         self.ref_title.setText(f"기준 동작 — {course['label']}")
 
         video_path = os.path.abspath(os.path.join(self.stretch_dir, course['video_filename']))
@@ -307,18 +380,22 @@ class StretchingTab(QWidget):
         if not ok:
             # 기준 동작 영상은 반복 재생하지 않는다 — 끝나면 타이머만 멈추고
             # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다. 그리고 바로 이
-            # 순간이 "끝났다"는 기준이므로, 서버의 세션 종료 메시지를 기다리지 않고
-            # 우측 화면도 지금 바로 멈춰서 검정 결과 화면으로 바꾼다 — 좌/우가
-            # 항상 같은 타이밍에 끝나도록.
+            # 순간을 "끝났다"는 기준으로 삼아 곧(FINISH_GRACE_MS 뒤) 우측 화면도
+            # 검정 결과 화면으로 바꾼다 — 좌/우가 거의 같은 타이밍에 끝나도록.
+            # 곧바로 잠그지 않고 짧게 기다리는 이유는 FINISH_GRACE_MS 주석 참고 —
+            # 그 사이 네트워크상에 아직 오고 있던 마지막 프레임 몇 개를 버리지
+            # 않기 위해서다.
             self.ref_timer.stop()
             if not self.session_ended:
-                self._finish_session()
+                self.pending_finish_gen = self.session_gen
+                self.finish_timer.start(FINISH_GRACE_MS)
             return
         self.ref_view.setPixmap(to_pixmap(fit_to_view(frame, VIEW_W, VIEW_H)))
 
     def stop(self):
         """앱 종료 시 정리용 (app.py의 closeEvent에서 호출)"""
         self.ref_timer.stop()
+        self.finish_timer.stop()
         if self.ref_cap is not None:
             self.ref_cap.release()
             self.ref_cap = None
