@@ -1,4 +1,5 @@
 # config/settings.py
+import os
 from pathlib import Path
 
 # ============ 기준 경로 ============
@@ -31,3 +32,23 @@ FALL_DETECTOR_MODEL = str(MODEL_DIR / 'fall_lstm.pt')
 # Gait Analysis (6개 모델) 자체로딩
 
 # Stretching (모델 불필요)
+
+# ============ 카메라 ↔ 환자 배정 ============
+# DB patients 테이블에 카메라 컬럼이 없어서 여기서 1:1로 배정 (카메라 ID → patients.id)
+# 배정 안 된 환자는 GUI 환자 목록에 안 나옴
+CAMERA_PATIENTS = {
+    'CAM-01': 1,   # 김철수
+    'CAM-02': 2,   # 이영희
+    'CAM-03': 3,   # 박민수
+    'CAM-04': 4,   # 정수진
+    'CAM-05': 5,   # 최동욱
+}
+
+# ============ DB (MySQL) ============
+# 비밀번호를 git에 올리지 않도록 환경변수 우선, 없으면 기본값 사용
+#   export SILVERCARE_DB_PASSWORD=실제비번
+DB_HOST = os.environ.get('SILVERCARE_DB_HOST', 'localhost')
+DB_PORT = int(os.environ.get('SILVERCARE_DB_PORT', '3306'))
+DB_USER = os.environ.get('SILVERCARE_DB_USER', 'root')
+DB_PASSWORD = os.environ.get('SILVERCARE_DB_PASSWORD', '')
+DB_NAME = os.environ.get('SILVERCARE_DB_NAME', 'hospital_monitoring')

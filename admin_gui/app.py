@@ -21,6 +21,8 @@ import threading
 import cv2
 import numpy as np
 
+from . import db_stub
+from . import patients as patients_module
 from .drawing import draw_fall, draw_gait
 from .fall_tab import FallTab
 from .gait_tab import GaitTab
@@ -116,6 +118,8 @@ class AdminWindow(QMainWindow):
 
         self.store = FrameStore()
         self.link = MainLink()
+        db_stub.set_link(self.link)
+        self.was_connected = False          # main_server 연결 시점을 감지해서 환자 목록 요청
         self.result_queue = queue.Queue()
         self.stop_event = threading.Event()
 
@@ -176,6 +180,11 @@ class AdminWindow(QMainWindow):
 
     def update_views(self):
         """QTimer(30ms)에서만 호출 — 여기서만 Qt 위젯을 갱신한다."""
+        connected = self.link.conn is not None
+        if connected and not self.was_connected:
+            db_stub.request_patients()      # main_server에 붙자마자 DB 환자 목록 요청
+        self.was_connected = connected
+
         while True:
             try:
                 msg = self.result_queue.get_nowait()
@@ -183,7 +192,26 @@ class AdminWindow(QMainWindow):
                 break
             self.dispatch(msg)
 
+    def handle_server_message(self, msg):
+        """분석 결과가 아닌 main_server 메시지 (DB 요청 응답, 스트레칭 세션 종료 등)"""
+        kind = msg.get('type')
+        if kind == 'response':
+            cmd = msg.get('cmd')
+            if not msg.get('ok'):
+                print(f"[GUI] 요청 실패: {cmd} (req_id={msg.get('req_id')})")
+                return
+            if cmd == 'get_patients':
+                patients = patients_module.set_patients(msg.get('data') or [])
+                self.gait_tab.set_patients(patients)
+                self.stretch_tab.set_patients(patients)
+                print(f"[GUI] 환자 {len(patients)}명 로드")
+        elif kind == 'stretch_session_end':
+            self.stretch_tab.on_session_end(msg)
+
     def dispatch(self, msg):
+        if msg.get('type'):                 # 분석 결과 메시지에는 'type'이 없음
+            self.handle_server_message(msg)
+            return
         camera_id = msg.get('camera_id')
         mode = msg.get('mode')
         frame_idx = msg.get('frame_idx')

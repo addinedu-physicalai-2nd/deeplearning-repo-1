@@ -2,11 +2,15 @@
 import argparse
 import json
 import logging
+import queue
+import re
 import threading
 import time
+from pathlib import Path
 
 from config.settings import CAMERA_PORTS
 from .main_networkmanager import MainNetworkManager
+from .db_manager import DBManager
 from .fall_analyzer import FallAnalyzer
 from .stretching_analyzer import StretchingAnalyzer
 
@@ -32,12 +36,24 @@ def load_reference(path):
     return reference
 
 
+def parse_course(reference_path):
+    """'.../05_목운동_skeleton.json' → (5, '목운동'). 형식이 다르면 (None, 파일 이름)"""
+    stem = Path(reference_path).stem
+    if stem.endswith('_skeleton'):
+        stem = stem[:-len('_skeleton')]
+    match = re.match(r'^(\d+)_(.+)$', stem)
+    if match:
+        return int(match.group(1)), match.group(2)
+    return None, stem
+
+
 class MainService:
     """카메라 프레임 → AI Server, AI 결과 → mode별 분석 → GUI"""
 
     def __init__(self, default_mode=MODE_FALL, stretch_ref_path=None,
-                 ai_host='localhost', gui_host='localhost'):
+                 ai_host='localhost', gui_host='localhost', use_db=True):
         self.net = MainNetworkManager(ai_host=ai_host, gui_host=gui_host)
+        self.db = DBManager(enabled=use_db)
 
         self.fall_analyzer = FallAnalyzer()
         self.stretching_analyzer = None
@@ -51,11 +67,14 @@ class MainService:
             MODE_STRETCH: self.stretching_analyzer,
         }
 
+        self.default_mode = default_mode
         self.modes = {cam_id: default_mode for cam_id in CAMERA_PORTS}
         self.frame_idx = {cam_id: 0 for cam_id in CAMERA_PORTS}        # AI/GUI 매칭용 번호
         self.frame_counter = {cam_id: 0 for cam_id in CAMERA_PORTS}
         self.result_counter = {cam_id: 0 for cam_id in CAMERA_PORTS}
         self.state_lock = threading.Lock()                              # frame_idx 리셋/증가 보호
+        self.stretch_sessions = {}          # camera_id → 진행 중인 스트레칭 세션 (점수 누적, DB 저장용)
+        self.pending_resolves = queue.Queue()   # 낙상 처리완료 요청 → 결과 처리 스레드에서 FallAnalyzer에 반영
         self.is_running = False
 
         self.logger = logging.getLogger('MainService')
@@ -68,29 +87,114 @@ class MainService:
             self.logger.info(f"[{camera_id}] mode -> {mode}")
 
     def handle_command(self, cmd):
-        """GUI에서 온 명령 처리"""
+        """GUI에서 온 명령 처리 (GUI 명령 수신 스레드에서 실행)"""
         name = cmd.get('cmd')
+
+        # ---- DB 요청: 결과를 같은 req_id로 GUI에 응답 ----
+        if name == 'get_patients':
+            patients = self.db.get_patients()
+            self._reply(cmd, patients is not None, patients or [])
+            return
+        if name == 'save_gait_session':
+            ok = self.db.save_gait_session(cmd.get('patient_id'), cmd.get('cumulative_scores') or {})
+            self._reply(cmd, ok)
+            return
+
+        # ---- 카메라 제어 명령 ----
         camera_id = cmd.get('camera_id')
         if camera_id not in self.modes:
             self.logger.warning(f"Command with unknown camera_id: {cmd}")
             return
 
         if name == 'start_stretching':
-            # 기준 영상 재생 시작 → 기준 자세 교체 + frame_idx 0부터 다시 매김
+            # 기준 영상 재생 시작 → 기준 자세 교체 + frame_idx 0부터 다시 매김 + 세션 시작
             reference = load_reference(cmd['reference'])
+            course_id, course_name = parse_course(cmd['reference'])
+            patient_id = cmd.get('patient_id')
+            if patient_id is None:
+                patient = self.db.get_patient_by_camera(camera_id)
+                patient_id = patient['patient_id'] if patient else None
+            last_idx = max((s['frame_index'] for s in reference['skeletons']), default=0)
+
             with self.state_lock:
+                stopped = self.stretch_sessions.pop(camera_id, None)
                 self.stretching_analyzer = StretchingAnalyzer(reference)
                 self.analyzers[MODE_STRETCH] = self.stretching_analyzer
                 self.frame_idx[camera_id] = 0
                 self.modes[camera_id] = MODE_STRETCH
-            self.logger.info(f"[{camera_id}] stretching start: {reference.get('movement_name', cmd['reference'])} "
-                             f"({len(reference['skeletons'])} ref frames), frame_idx reset")
+                self.stretch_sessions[camera_id] = {
+                    'patient_id': patient_id, 'course_id': course_id, 'course_name': course_name,
+                    'last_idx': last_idx, 'scores': [],
+                }
+            self._finish_stretch_session(camera_id, stopped, completed=False)
+            self.logger.info(f"[{camera_id}] stretching start: {course_name} ({len(reference['skeletons'])} ref frames, "
+                             f"patient={patient_id}), frame_idx reset")
 
         elif name == 'set_mode':
+            if cmd.get('mode') != MODE_STRETCH:
+                with self.state_lock:
+                    stopped = self.stretch_sessions.pop(camera_id, None)
+                self._finish_stretch_session(camera_id, stopped, completed=False)
             self.set_mode(camera_id, cmd.get('mode'))
+
+        elif name == 'resolve_fall':
+            # FallAnalyzer는 결과 처리 스레드만 건드리게 큐로 넘기고, DB 기록은 여기서 바로
+            self.pending_resolves.put((camera_id, cmd.get('track_id')))
+            ok = self.db.resolve_fall_event(camera_id, cmd.get('track_id'), cmd.get('caregiver_name'))
+            self._reply(cmd, ok)
 
         else:
             self.logger.warning(f"Unknown command: {name}")
+
+    def _reply(self, cmd, ok, data=None):
+        """GUI 요청에 대한 응답. 분석 결과 메시지와 구분되게 'type': 'response'를 붙임"""
+        self.net.send_to_gui({
+            'type': 'response',
+            'cmd': cmd.get('cmd'),
+            'req_id': cmd.get('req_id'),
+            'ok': ok,
+            'data': data,
+        })
+
+    # ============ 스트레칭 세션 ============
+    def _finish_stretch_session(self, camera_id, session, completed):
+        """세션 마무리 (state_lock 밖에서 호출 — DB 저장/전송이 카메라 스레드를 막지 않게).
+        기준 영상을 끝까지 했으면(completed) 평균 점수를 DB에 저장하고 GUI에 알림"""
+        if session is None:
+            return
+        scores = session['scores']
+        avg = sum(scores) / len(scores) if scores else None
+        saved = False
+        if completed and avg is not None and session['patient_id'] is not None:
+            saved = self.db.save_stretch_session(session['patient_id'], camera_id, session['course_id'], avg)
+        self.logger.info(f"[{camera_id}] stretching {'done' if completed else 'stopped'}: {session['course_name']} "
+                         f"avg={avg if avg is None else round(avg, 1)} ({len(scores)} frames), saved={saved}")
+        self.net.send_to_gui({
+            'type': 'stretch_session_end',
+            'camera_id': camera_id,
+            'course_id': session['course_id'],
+            'course_name': session['course_name'],
+            'completed': completed,
+            'avg_score': avg,
+            'frames_scored': len(scores),
+            'saved': saved,
+        })
+
+    def _track_stretch_score(self, camera_id, frame_idx, gui_data):
+        """스트레칭 결과 1프레임을 세션에 누적. 기준 영상 마지막 프레임을 지나면 세션 완료 + 기본 모드로 복귀"""
+        finished = None
+        with self.state_lock:
+            session = self.stretch_sessions.get(camera_id)
+            if session is None:
+                return
+            tracking = (gui_data or {}).get('tracking_data') or {}
+            if tracking:
+                first = next(iter(tracking.values()))       # 화면에는 한 명만 표시하므로 첫 번째 사람 기준
+                session['scores'].append(first['overall']['score'])
+            if frame_idx >= session['last_idx']:
+                finished = self.stretch_sessions.pop(camera_id)
+                self.modes[camera_id] = self.default_mode
+        self._finish_stretch_session(camera_id, finished, completed=True)
 
     def process_frame(self, camera_id, jpg_bytes):
         """카메라 프레임 수신 시 호출 → 같은 frame_idx로 AI Server와 GUI에 전송"""
@@ -106,6 +210,11 @@ class MainService:
     def update_gui(self):
         """AI 결과를 주기적으로 꺼내서 분석 후 GUI로 전송"""
         while self.is_running:
+            # GUI에서 온 낙상 처리완료 → FallAnalyzer 반영 (분석기는 이 스레드에서만 건드림)
+            while not self.pending_resolves.empty():
+                camera_id, track_id = self.pending_resolves.get_nowait()
+                self.fall_analyzer.resolve(camera_id, track_id)
+
             results = self.net.get_latest_results()   # {camera_id: [aioutput, ...]}
 
             for camera_id, outputs in results.items():
@@ -125,6 +234,13 @@ class MainService:
                     if gui_data is None:
                         continue
                     self.send_to_gui(camera_id, aioutput, gui_data)
+
+                    mode = aioutput.get('mode')
+                    if mode == MODE_FALL:
+                        for event in gui_data.get('events', []):
+                            self.db.log_fall_event(camera_id, event.get('track_id'), event.get('event', ''))
+                    elif mode == MODE_STRETCH:
+                        self._track_stretch_score(camera_id, frame_idx, gui_data)
 
             time.sleep(UPDATE_INTERVAL_SEC)
 
@@ -168,6 +284,7 @@ class MainService:
         self.logger.info(" | ".join(active) if active else "no camera frames / AI results")
 
     def run(self):
+        self.db.check_connection()
         self.is_running = True
         self.net.start(on_frame=self.process_frame, on_command=self.handle_command)
         threading.Thread(target=self.update_gui, daemon=True).start()
@@ -182,6 +299,7 @@ class MainService:
         finally:
             self.is_running = False
             self.net.stop()
+            self.db.close()
 
 
 if __name__ == '__main__':
@@ -192,6 +310,7 @@ if __name__ == '__main__':
                         help='스트레칭 기준 자세 JSON 경로 (없으면 mode 2는 AI 결과 그대로 전달)')
     parser.add_argument('--ai-host', default='localhost')
     parser.add_argument('--gui-host', default='localhost')
+    parser.add_argument('--no-db', action='store_true', help='DB 없이 실행 (환자 목록 비어 있음, 기록 저장 안 함)')
     args = parser.parse_args()
 
     service = MainService(
@@ -199,5 +318,6 @@ if __name__ == '__main__':
         stretch_ref_path=args.stretch_ref,
         ai_host=args.ai_host,
         gui_host=args.gui_host,
+        use_db=not args.no_db,
     )
     service.run()

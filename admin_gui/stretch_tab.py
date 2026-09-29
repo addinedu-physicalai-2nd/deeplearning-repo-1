@@ -170,6 +170,20 @@ class StretchingTab(QWidget):
         filtered = [p for p in self.patients if text in p.name] if text else self.patients
         self._populate_patient_list(filtered)
 
+    def set_patients(self, patients):
+        """main_server에서 환자 목록이 도착하면 app.py가 호출 (검색어는 유지)"""
+        self.patients = patients
+        self._filter_patients(self.search_input.text())
+
+    def on_session_end(self, msg):
+        """main_server가 스트레칭 세션을 끝내면 호출 (기준 영상 끝까지 → 평균 점수 DB 저장)"""
+        if msg.get('camera_id') != self.active_camera_id:
+            return
+        avg = msg.get('avg_score')
+        if msg.get('completed') and avg is not None:
+            saved = "저장됨" if msg.get('saved') else "저장 실패"
+            self.my_title.setText(f"완료 — {msg.get('course_name')} 평균 {avg:.0f}점 ({saved})")
+
     def _course_by_id(self, course_id):
         for course in self.courses:
             if course['course_id'] == course_id:
@@ -197,6 +211,7 @@ class StretchingTab(QWidget):
         self.link.send({
             "cmd": "start_stretching",
             "camera_id": patient.camera_id,
+            "patient_id": patient.patient_id,
             "reference": skeleton_path,
         })
 

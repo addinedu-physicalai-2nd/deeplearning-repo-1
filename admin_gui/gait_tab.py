@@ -157,6 +157,11 @@ class GaitTab(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, p)
             self.patient_list.addItem(item)
 
+    def set_patients(self, patients):
+        """main_server에서 환자 목록이 도착하면 app.py가 호출 (검색어는 유지)"""
+        self.patients = patients
+        self._filter_patients(self.search_input.text())
+
     def _filter_patients(self, text):
         text = text.strip()
         filtered = [p for p in self.patients if text in p.name or text in p.room] if text else self.patients

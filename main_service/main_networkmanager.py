@@ -22,7 +22,7 @@ from config.settings import (
 
 UDP_MAX_BYTES = 65000        # UDP 데이터그램 한계(65507)보다 약간 작게
 RESULT_QUEUE_LEN = 60        # 카메라별 미처리 AI 결과 최대 보관 개수
-GUI_RETRY_SEC = 2.0          # GUI 연결 실패 시 재시도 간격
+GUI_RETRY_SEC = 2.0          # GUI 연결 확인/재시도 간격
 
 
 def _to_json_safe(obj):
@@ -42,7 +42,7 @@ class MainNetworkManager:
     - AI    → Main : HTTP POST /ai_result (MAIN_SERVICE_PORT)
     - Main  → GUI  : TCP  (GUI_INFO_PORT, 한 줄에 JSON 하나)
     - Main  → GUI  : UDP  (GUI_VIDEO_PORT, [2바이트 헤더 길이][JSON 헤더][JPEG])
-    - GUI   → Main : 같은 TCP 연결로 명령 수신 (한 줄에 JSON 하나)
+    - GUI   → Main : 같은 TCP 연결로 명령/DB 요청 수신 (한 줄에 JSON 하나)
     """
 
     def __init__(self, ai_host='localhost', ai_port=AI_SERVER_PORT,
@@ -65,7 +65,6 @@ class MainNetworkManager:
 
         self.gui_sock = None
         self.gui_lock = threading.Lock()
-        self.gui_next_retry = 0.0
         self.gui_warned = False
 
         self.on_frame = None
@@ -96,6 +95,9 @@ class MainNetworkManager:
         self.http_server = ThreadingHTTPServer(('0.0.0.0', self.main_port), self._make_handler())
         threading.Thread(target=self.http_server.serve_forever, daemon=True).start()
         self.logger.info(f"AI result server on http://0.0.0.0:{self.main_port}/ai_result")
+
+        # GUI 연결 유지 스레드: AI 결과가 없어도 시작하자마자 GUI에 접속 (GUI가 먼저 요청할 수 있게)
+        threading.Thread(target=self._gui_connect_loop, daemon=True).start()
 
     def stop(self):
         self.is_running = False
@@ -247,35 +249,43 @@ class MainNetworkManager:
         return results
 
     # ============ Main → GUI (TCP) ============
+    def _gui_connect_loop(self):
+        """GUI와 연결이 없으면 GUI_RETRY_SEC마다 접속 시도 (연결되면 명령 수신 스레드 시작)"""
+        while self.is_running:
+            with self.gui_lock:
+                if self.gui_sock is None:
+                    try:
+                        self.gui_sock = socket.create_connection((self.gui_host, self.gui_port), timeout=0.5)
+                        self.gui_sock.settimeout(1.0)
+                        self.gui_warned = False
+                        self.logger.info(f"Connected to GUI {self.gui_host}:{self.gui_port}")
+                        threading.Thread(target=self._gui_command_loop, args=(self.gui_sock,), daemon=True).start()
+                    except OSError:
+                        self.gui_sock = None
+                        if not self.gui_warned:
+                            self.logger.warning(f"GUI not reachable ({self.gui_host}:{self.gui_port}), retrying")
+                            self.gui_warned = True
+            time.sleep(GUI_RETRY_SEC)
+
+    def _drop_gui(self, sock, reason):
+        """끊긴 GUI 소켓 정리 (다음 _gui_connect_loop 주기에 재접속). gui_lock을 잡은 상태에서 호출"""
+        if self.gui_sock is sock and sock is not None:
+            self.logger.warning(f"GUI connection lost: {reason}")
+            sock.close()
+            self.gui_sock = None
+
     def send_to_gui(self, message):
-        """GUI로 JSON 한 줄 전송. GUI가 안 떠 있으면 버리고 주기적으로 재접속"""
+        """GUI로 JSON 한 줄 전송. 연결이 없으면 버림 (재접속은 _gui_connect_loop가 담당)"""
         line = (json.dumps(message, ensure_ascii=False, default=_to_json_safe) + '\n').encode('utf-8')
 
         with self.gui_lock:
             if self.gui_sock is None:
-                if time.monotonic() < self.gui_next_retry:
-                    return False
-                try:
-                    self.gui_sock = socket.create_connection((self.gui_host, self.gui_port), timeout=0.5)
-                    self.gui_sock.settimeout(1.0)
-                    self.gui_warned = False
-                    self.logger.info(f"Connected to GUI {self.gui_host}:{self.gui_port}")
-                    threading.Thread(target=self._gui_command_loop, args=(self.gui_sock,), daemon=True).start()
-                except OSError:
-                    self.gui_next_retry = time.monotonic() + GUI_RETRY_SEC
-                    if not self.gui_warned:
-                        self.logger.warning(f"GUI not reachable ({self.gui_host}:{self.gui_port}), retrying")
-                        self.gui_warned = True
-                    return False
-
+                return False
             try:
                 self.gui_sock.sendall(line)
                 return True
             except OSError as e:
-                self.logger.warning(f"GUI connection lost: {e}")
-                self.gui_sock.close()
-                self.gui_sock = None
-                self.gui_next_retry = time.monotonic() + GUI_RETRY_SEC
+                self._drop_gui(self.gui_sock, e)
                 return False
 
     # ============ GUI → Main (같은 TCP 연결로 명령 수신) ============
@@ -308,3 +318,7 @@ class MainNetworkManager:
                     self.on_command(cmd)
                 except Exception as e:
                     self.logger.error(f"Command error {cmd.get('cmd')}: {e}")
+
+        # GUI가 연결을 끊음 → 정리해두면 _gui_connect_loop가 다시 접속
+        with self.gui_lock:
+            self._drop_gui(sock, "closed by GUI")
