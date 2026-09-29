@@ -178,7 +178,7 @@ def main():
     app = QApplication([])
     app.setStyleSheet(STYLE_SHEET)
     window = AdminWindow(stretch_dir=args.stretch_dir)
-    window.resize(1400, 800)
+    window.resize(1600, 900)   # 스트레칭 탭 영상이 커져서 창도 키운다
     window.show()
     app.exec()
 

@@ -82,6 +82,24 @@ def draw_camera_overlay(frame, camera_id, room_label):
     cv2.circle(frame, (w - tw - 32, 17), 4, (0, 0, 255), -1)
 
 
+def draw_stretch_badge(frame, level, score):
+    """스트레칭 종합 판정을 옆 패널 대신 영상 우측 상단에 직접 찍는다.
+    level: 1(안 맞음)~5(잘 맞음), 없으면 회색 '판정 대기'로 표시. score: 0~100."""
+    color = LEVEL_COLOR.get(level, UNKNOWN_COLOR)
+    label = f"Lv.{level} - {score:.0f}" if level else "waiting"
+    h, w = frame.shape[:2]
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+    pad_x, pad_y = 14, 10
+    box_w, box_h = tw + pad_x * 2, th + pad_y * 2
+    x2, y2 = w - 16, 16 + box_h
+    x1, y1 = x2 - box_w, 16
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+    cv2.putText(frame, label, (x1 + pad_x, y2 - pad_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
+
 def draw_fall(frame, data):
     """낙상 탭용 — bbox를 프레임에 직접 그림. 테두리 색/팝업 로직은 fall_tab.py에서 담당."""
     for track in data.get('tracks', []):

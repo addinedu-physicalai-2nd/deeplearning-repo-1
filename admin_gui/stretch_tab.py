@@ -8,24 +8,21 @@
 하드코딩하지 않고 `list_courses()`가 그 폴더를 실제로 스캔해서 만든다 —
 나중에 영상이 추가/삭제돼도 코드를 안 건드려도 된다.
 
-어떤 환자(=카메라)가 스트레칭을 하는지는 코스마다 고정된 게 아니라 매번
-골라야 하므로, 보행 탭과 마찬가지로 `patients.py`의 더미 환자 목록에서
-선택한다(진짜 DB가 붙으면 `patients.get_patients()` 내부만 바뀌고 여기는
-그대로 쓰면 됨).
+화면 구성(보행 탭과 통일):
+  - 좌측: 환자(=카메라) 선택 목록 (보행 탭과 동일하게 좌측 사이드바)
+  - 우측: 기준 동작 영상 + 실시간 카메라 영상을 크게 나란히 보여주고,
+    그 아래에 스트레칭 코스 선택 목록 + 시작 버튼을 둔다.
+
+종합 판정(1~5단계) 패널은 따로 두지 않는다 — 실시간으로 우측 영상 자체에
+스켈레톤 색 + 작은 뱃지로 바로 찍어버리면 되므로 별도 패널은 불필요
+(draw_stretch_badge, drawing.py).
 
 동작:
   1) 환자(카메라)와 스트레칭 코스를 고른 뒤 "시작"을 누르면
-  2) 좌측에 그 코스의 기준 동작 영상(사람이 스트레칭하는 시범 영상)이 반복 재생된다
+  2) 좌측 영상에 그 코스의 기준 동작 영상(사람이 스트레칭하는 시범 영상)이 반복 재생된다
      — 환자는 이 화면을 보면서 따라한다.
   3) main_server에 start_stretching 명령(기준 자세 JSON 절대경로 포함)을 보낸다.
-  4) 우측에는 그 환자의 실시간 카메라 영상 + 스켈레톤을 보여준다.
-
-부위별로 "어디가 얼마나 틀어졌는지" 세세하게 나오는 게 아니라, 전체적으로
-기준 자세와 얼마나 맞는지를 1~5단계로만 판정해서 색으로 보여준다
-(1단계=가장 안 맞음/빨강 ~ 5단계=가장 잘 맞음/초록). 그래서 스켈레톤 전체가
-그 단계 색 하나로 칠해지고, 우측에 단계 배지 + 점수만 표시한다. 반복 횟수는
-세지 않는다(StretchingAnalyzer가 판단, 단계 기준값은 GUI가 아니라
-main_server 쪽에만 있음).
+  4) 우측 영상에는 그 환자의 실시간 카메라 영상 + 스켈레톤 + 판정 뱃지를 보여준다.
 """
 import os
 import re
@@ -33,13 +30,17 @@ import re
 import cv2
 
 from . import patients as patients_module
-from .drawing import LEVEL_COLOR, LEVEL_HEX, UNKNOWN_COLOR, UNKNOWN_HEX, VIEW_W, VIEW_H, draw_skeleton, fit_to_view, to_pixmap
+from .drawing import (LEVEL_COLOR, UNKNOWN_COLOR, draw_skeleton,
+                       draw_stretch_badge, fit_to_view, to_pixmap)
 from .qt_compat import (
     Qt, QFont, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
 )
 
 SKELETON_SUFFIX = '_skeleton.json'
+
+# 보행 탭(480x360)보다 크게 — 좌우 영상이 화면의 실질적인 주인공이므로.
+VIEW_W, VIEW_H = 560, 420
 
 
 def list_courses(stretch_dir):
@@ -82,8 +83,10 @@ class StretchingTab(QWidget):
         self.patients = patients_module.get_patients()
 
         root = QHBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(16)
 
-        # 좌측: 환자(카메라) 선택 + 코스 목록 + 시작 버튼
+        # 좌측: 환자(카메라) 선택 — 보행 탭과 동일한 사이드바 구성
         left = QVBoxLayout()
         left.addWidget(QLabel("환자 선택"))
         self.patient_list = QListWidget()
@@ -91,39 +94,27 @@ class StretchingTab(QWidget):
             item = QListWidgetItem(f"{p.name} · {p.room} ({p.camera_id})")
             item.setData(Qt.ItemDataRole.UserRole, p)
             self.patient_list.addItem(item)
-        self.patient_list.setMaximumHeight(120)
         left.addWidget(self.patient_list)
-
-        left.addWidget(QLabel("스트레칭 선택"))
-        self.course_list = QListWidget()
-        if not self.courses:
-            placeholder = QListWidgetItem(f"'{stretch_dir}' 폴더에서 영상을 찾지 못했습니다")
-            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.course_list.addItem(placeholder)
-        for course in self.courses:
-            item = QListWidgetItem(course['label'])
-            item.setData(Qt.ItemDataRole.UserRole, course['course_id'])
-            self.course_list.addItem(item)
-        left.addWidget(self.course_list)
-
-        self.start_btn = QPushButton("시작")
-        self.start_btn.clicked.connect(self.start_video)
-        left.addWidget(self.start_btn)
 
         left_widget = QWidget()
         left_widget.setLayout(left)
-        left_widget.setFixedWidth(240)
+        left_widget.setFixedWidth(250)
         root.addWidget(left_widget)
 
-        # 중앙: 기준 동작 영상(반복 재생) / 실시간 카메라
+        # 우측: 영상 두 개(크게) + 그 아래 스트레칭 코스 선택 + 시작 버튼
+        right = QVBoxLayout()
+        right.setSpacing(12)
+
         views = QHBoxLayout()
+        views.setSpacing(16)
+
         ref_col = QVBoxLayout()
         self.ref_title = QLabel("기준 동작")
         self.ref_title.setFont(QFont('', -1, QFont.Weight.Bold))
         ref_col.addWidget(self.ref_title)
         self.ref_view = QLabel()
         self.ref_view.setFixedSize(VIEW_W, VIEW_H)
-        self.ref_view.setStyleSheet("background:#111; border-radius:6px;")
+        self.ref_view.setStyleSheet("background:#0d0d10; border-radius:10px;")
         self.ref_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ref_col.addWidget(self.ref_view)
         views.addLayout(ref_col)
@@ -134,36 +125,31 @@ class StretchingTab(QWidget):
         my_col.addWidget(self.my_title)
         self.my_view = QLabel()
         self.my_view.setFixedSize(VIEW_W, VIEW_H)
-        self.my_view.setStyleSheet("background:#111; border-radius:6px;")
+        self.my_view.setStyleSheet("background:#0d0d10; border-radius:10px;")
         self.my_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
         my_col.addWidget(self.my_view)
         views.addLayout(my_col)
-        root.addLayout(views)
 
-        # 우측: 종합 판정(1~5단계, 부위별 세부 항목 없음)
-        right = QVBoxLayout()
-        right.addWidget(QLabel("종합 판정"))
+        right.addLayout(views)
 
-        self.level_badge = QLabel("-")
-        self.level_badge.setFixedSize(90, 90)
-        self.level_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.level_badge.setFont(QFont('', 26, QFont.Weight.Bold))
-        self._set_level_style(None)
-        right.addWidget(self.level_badge)
+        right.addWidget(QLabel("스트레칭 선택"))
+        self.course_list = QListWidget()
+        self.course_list.setMaximumHeight(150)
+        if not self.courses:
+            placeholder = QListWidgetItem(f"'{stretch_dir}' 폴더에서 영상을 찾지 못했습니다")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.course_list.addItem(placeholder)
+        for course in self.courses:
+            item = QListWidgetItem(course['label'])
+            item.setData(Qt.ItemDataRole.UserRole, course['course_id'])
+            self.course_list.addItem(item)
+        right.addWidget(self.course_list)
 
-        self.score_label = QLabel("대기 중")
-        right.addWidget(self.score_label)
-        right.addStretch()
-        right_widget = QWidget()
-        right_widget.setLayout(right)
-        right_widget.setFixedWidth(160)
-        root.addWidget(right_widget)
+        self.start_btn = QPushButton("시작")
+        self.start_btn.clicked.connect(self.start_video)
+        right.addWidget(self.start_btn)
 
-    def _set_level_style(self, level):
-        color = LEVEL_HEX.get(level, UNKNOWN_HEX)
-        self.level_badge.setStyleSheet(
-            f"background:{color}; color:white; border-radius:45px;")
-        self.level_badge.setText(f"{level}" if level else "-")
+        root.addLayout(right, stretch=1)
 
     def _course_by_id(self, course_id):
         for course in self.courses:
@@ -215,27 +201,28 @@ class StretchingTab(QWidget):
             self.ref_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)   # 끝나면 처음부터 반복 재생
             ok, frame = self.ref_cap.read()
         if ok:
-            self.ref_view.setPixmap(to_pixmap(fit_to_view(frame)))
+            self.ref_view.setPixmap(to_pixmap(fit_to_view(frame, VIEW_W, VIEW_H)))
 
     def stop(self):
-        """앱 종료 시 정리용 (admin_gui.py의 closeEvent에서 호출)"""
+        """앱 종료 시 정리용 (app.py의 closeEvent에서 호출)"""
         self.ref_timer.stop()
         if self.ref_cap is not None:
             self.ref_cap.release()
             self.ref_cap = None
 
     def on_result(self, camera_id, msg, frame):
-        """result_receiver가 mode 2 메시지를 줄 때마다 admin_gui.py의 dispatch()가 호출.
-        frame은 admin_gui.py가 이미 FrameStore에서 꺼내 cv2.imdecode까지 해둔 것 —
+        """result_receiver가 mode 2 메시지를 줄 때마다 app.py의 dispatch()가 호출.
+        frame은 app.py가 이미 FrameStore에서 꺼내 cv2.imdecode까지 해둔 것 —
         우측 '실시간 카메라' 화면이 바로 이 프레임이다."""
         if camera_id != self.active_camera_id:
             return
         data = msg.get('data', {})
         tracking = data.get('tracking_data', {})
+
         if not tracking:
-            self.my_view.setPixmap(to_pixmap(fit_to_view(frame)))
-            self.score_label.setText("추적된 사람 없음")
-            self._set_level_style(None)
+            view = fit_to_view(frame, VIEW_W, VIEW_H)
+            draw_stretch_badge(view, None, 0)
+            self.my_view.setPixmap(to_pixmap(view))
             return
 
         # 화면에는 한 명만 표시 (첫 번째 track)
@@ -244,9 +231,9 @@ class StretchingTab(QWidget):
         level = overall.get('level')          # 1(안 맞음) ~ 5(잘 맞음) — 부위별 세부 없음
         score = overall.get('score', 0)
 
-        # 스켈레톤 전체를 그 단계 색 하나로 그린다 (부위별로 다른 색을 주지 않음)
+        # fit_to_view 이후의 keypoints는 원본 해상도 좌표라 좌표가 안 맞을 수 있으므로,
+        # 스켈레톤은 원본 frame에 먼저 그리고 그 다음에 뷰 크기로 맞춘다.
         draw_skeleton(frame, info.get('keypoints_px', []), default=LEVEL_COLOR.get(level, UNKNOWN_COLOR))
-        self.my_view.setPixmap(to_pixmap(fit_to_view(frame)))
-
-        self._set_level_style(level)
-        self.score_label.setText(f"{score:.0f}점")
+        view = fit_to_view(frame, VIEW_W, VIEW_H)
+        draw_stretch_badge(view, level, score)
+        self.my_view.setPixmap(to_pixmap(view))

@@ -194,15 +194,6 @@ class FallTab(QWidget):
         outer.setContentsMargins(24, 20, 24, 20)
         outer.setSpacing(12)
 
-        rooms = ', '.join(room for _, room, _ in FALL_CAMERAS)
-        desc = QLabel(
-            f"카메라 {len(FALL_CAMERAS)}대({rooms}, 침상마다 1대씩 고정 배정)를 "
-            f"상시 모니터링합니다. 낙상 확정 시 빨간 테두리, 추적 불안정 시 주황 테두리로 표시됩니다."
-        )
-        desc.setWordWrap(True)
-        desc.setStyleSheet("color:#6b7280; font-size:13px;")
-        outer.addWidget(desc)
-
         content = QHBoxLayout()
         content.setSpacing(16)
 
