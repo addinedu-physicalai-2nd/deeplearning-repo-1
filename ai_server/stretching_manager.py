@@ -78,15 +78,21 @@ class StretchingManager:
         raw_kp = np.array(raw_kp, dtype=np.float32)
         
         # ============ 각도 계산 ============
-        angles = []
-        for p1, p2 in self.limbs:
+        limb_names = ['left_arm', 'right_arm', 'left_leg', 'right_leg']  # self.limbs 순서와 동일
+        limb_angles = {}
+        for limb_name, (p1, p2) in zip(limb_names, self.limbs):
             vec = normalized_kp[p2] - normalized_kp[p1]
             angle = np.degrees(np.arctan2(vec[1], vec[0]))
-            angles.append(angle)
+            limb_angles[limb_name] = float(angle)
         
         # ============ 거리 계산 ============
         arm_dist = float(np.linalg.norm(normalized_kp[9] - normalized_kp[10]))
         leg_dist = float(np.linalg.norm(normalized_kp[15] - normalized_kp[16]))
+        
+        spread_distances = {
+            'arm_spread': arm_dist,
+            'leg_spread': leg_dist
+        }
         
         # ============ 신뢰도 (마지막 column이 confidence인 경우) ============
         if raw_kp.shape[1] > 2:
@@ -99,7 +105,7 @@ class StretchingManager:
         
         return {
             'keypoints': normalized_kp.tolist(),  # Main에서 호모그래피 적용용
-            'limb_angles': [float(a) for a in angles],
-            'spread_distances': [arm_dist, leg_dist],
+            'limb_angles': limb_angles,
+            'spread_distances': spread_distances,
             'confidence': confidence
         }
