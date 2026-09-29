@@ -1,35 +1,41 @@
 # admin_gui/fall_tab.py
-"""낙상 탭 — 목업(gui_mockup_v5.html)의 낙상 탭 동작을 그대로 구현.
+"""낙상 탭 — 목업(gui_mockup_v5.html)의 낙상 탭 동작 + 스타일을 그대로 구현.
 
-카메라 2대(CAM-01=101호, CAM-02=102호) 고정. 상태에 따라 카메라 박스 테두리
-색이 바뀌고(정상=투명, 주의=주황, 낙상=빨강), 낙상/주의 이벤트가 발생하면
-화면 우측 상단에 알림 카드가 쌓인다. 낙상(빨강) 카드를 클릭하면 팝업이 뜬다. 카메라(=침상)는 환자와 1:1로 고정
-매칭되어 있으므로 환자명은 이미 알고 있는 값을 그대로 보여주고, 요양보호사명만
-입력하면 "처리 완료" 버튼이 활성화된다. 주의(주황) 카드는 클릭하면 바로 닫힌다
-(목업과 동일).
+카메라 2대(CAM-01=101호, CAM-02=102호) 고정. 상태에 따라 카드 테두리 색이
+바뀌고(정상=연회색, 주의=주황, 낙상=빨강), 낙상/주의 이벤트가 발생하면 화면
+우측에 알림 카드가 쌓인다. 낙상(빨강) 카드를 클릭하면 팝업이 뜬다. 카메라(=
+침상)는 환자와 1:1로 고정 매칭되어 있으므로 환자명은 이미 알고 있는 값을
+그대로 보여주고, 요양보호사명만 입력하면 "처리 완료" 버튼이 활성화된다.
+주의(주황) 카드는 클릭하면 바로 닫힌다(목업과 동일).
 
 resolve_fall 명령은 main_server 쪽에 아직 없음 (작업 지시서 기준) — 여기서는
 전송 코드까지만 만들어두고, 화면은 로컬에서 낙관적으로 정상 상태로 되돌린다.
 서버가 명령을 지원하게 되면 MainLink.send() 호출 자체는 그대로 쓰면 된다.
+
+스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
+그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
+새어 들어가서 뱃지가 세로로 길게 늘어나는 버그가 생긴다 — header 컨테이너와
+badge에 setFixedHeight를 줘서 막는다.
 """
 from . import db_stub
-from .drawing import fit_to_view, to_pixmap
+from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
 from .qt_compat import (
-    Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget, pyqtSignal,
+    Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGraphicsDropShadowEffect,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
+    QWidget, pyqtSignal,
 )
 
 # 카메라(=침상) ↔ 환자 1:1 고정 매칭.
 # TODO(DB 연동 담당자): 더미값 — 실제 병상-환자 배정 테이블 조회로 교체 필요.
 FALL_CAMERAS = [('CAM-01', '101호', '김철수'), ('CAM-02', '102호', '홍길동')]
 
-STATE_BORDER = {'normal': 'transparent', 'checking': '#c9820a', 'alert': '#e5484d'}
+STATE_BORDER = {'normal': '#e5e7eb', 'checking': '#f59e0b', 'alert': '#ef4444'}
 STATE_BADGE_TEXT = {'normal': '정상', 'checking': '확인 필요', 'alert': '낙상 감지'}
-STATE_BADGE_BG = {'normal': '#2f9e44', 'checking': '#c9820a', 'alert': '#e5484d'}
+STATE_BADGE_BG = {'normal': '#2f9e44', 'checking': '#f59e0b', 'alert': '#ef4444'}
 
 
 class FallCameraBox(QWidget):
-    """카메라 1대 표시 박스 — 영상 + 방/환자 이름 + 상태 뱃지 + 상태별 테두리 색"""
+    """카메라 1대 표시 카드 — 영상 + 방/환자 이름 + 상태 뱃지(알약) + 상태별 카드 테두리"""
 
     def __init__(self, camera_id, room_label, patient_name):
         super().__init__()
@@ -39,36 +45,60 @@ class FallCameraBox(QWidget):
         self.state = 'normal'
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
 
-        header = QHBoxLayout()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # 헤더 줄: 고정 높이로 감싸서 카드가 늘어나도 뱃지가 같이 늘어나지 않게 한다.
+        header_container = QWidget()
+        header_container.setFixedHeight(30)
+        header = QHBoxLayout(header_container)
+        header.setContentsMargins(0, 0, 0, 0)
+
         name_label = QLabel(f"{room_label} · {patient_name}님")
-        name_label.setFont(QFont('', -1, QFont.Weight.Bold))
+        name_label.setStyleSheet("font-size:15px; font-weight:600; color:#111827; border:none;")
+
         self.badge = QLabel(STATE_BADGE_TEXT['normal'])
-        self.badge.setStyleSheet(
-            f"background:{STATE_BADGE_BG['normal']}; color:white; border-radius:8px; padding:2px 8px;")
+        self.badge.setFixedHeight(24)
+        self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         header.addWidget(name_label)
         header.addStretch()
         header.addWidget(self.badge)
-        layout.addLayout(header)
+        layout.addWidget(header_container)
 
         self.video_label = QLabel()
         self.video_label.setFixedSize(480, 360)
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("background:#111; border-radius:6px;")
+        self.video_label.setStyleSheet("background:#0d0d10; border-radius:10px;")
         layout.addWidget(self.video_label)
 
         self.status_label = QLabel('-')
-        self.status_label.setStyleSheet("color:#888;")
+        self.status_label.setStyleSheet("color:#9ca3af; font-size:12px; border:none;")
         layout.addWidget(self.status_label)
 
+        self._apply_badge_style('normal')
         self._apply_border()
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 40))
+        shadow.setOffset(0, 4)
+        self.setGraphicsEffect(shadow)
 
     def _apply_border(self):
         color = STATE_BORDER[self.state]
-        self.setStyleSheet(f"FallCameraBox {{ border: 3px solid {color}; border-radius: 10px; }}")
+        self.setStyleSheet(
+            f"FallCameraBox {{ background: #ffffff; border: 2px solid {color}; "
+            f"border-radius: 14px; }}"
+        )
+
+    def _apply_badge_style(self, state):
+        self.badge.setStyleSheet(
+            f"background:{STATE_BADGE_BG[state]}; color:#ffffff; border:none; "
+            f"border-radius:12px; padding:0 12px; font-size:12px; font-weight:600;"
+        )
 
     def set_state(self, state, status_text=None):
         if state not in STATE_BORDER:
@@ -76,34 +106,36 @@ class FallCameraBox(QWidget):
         self.state = state
         self._apply_border()
         self.badge.setText(STATE_BADGE_TEXT[state])
-        self.badge.setStyleSheet(
-            f"background:{STATE_BADGE_BG[state]}; color:white; border-radius:8px; padding:2px 8px;")
+        self._apply_badge_style(state)
         if status_text is not None:
             self.status_label.setText(status_text)
 
     def show_frame(self, frame_bgr):
-        pixmap = to_pixmap(fit_to_view(frame_bgr, 480, 360))
-        self.video_label.setPixmap(pixmap)
+        view = fit_to_view(frame_bgr, 480, 360)
+        draw_camera_overlay(view, self.camera_id, self.room_label)
+        self.video_label.setPixmap(to_pixmap(view))
 
 
 class AlertCard(QFrame):
-    """우측 상단에 쌓이는 알림 카드 (주황=주의/즉시 닫힘, 빨강=낙상/팝업 오픈)"""
+    """우측에 쌓이는 알림 카드 (주황=주의/즉시 닫힘, 빨강=낙상/팝업 오픈)"""
     clicked = pyqtSignal()
 
     def __init__(self, room_label, urgent, message):
         super().__init__()
         self.urgent = urgent
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        border_color = '#e5484d' if urgent else '#c9820a'
+        border_color = '#ef4444' if urgent else '#f59e0b'
         self.setStyleSheet(
-            f"AlertCard {{ background: palette(base); border-left: 4px solid {border_color}; "
-            f"border-radius: 6px; }}")
+            f"AlertCard {{ background: #ffffff; border: 1px solid #e5e7eb; "
+            f"border-left: 4px solid {border_color}; border-radius: 10px; }}")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
         title = QLabel(f"{'낙상 감지' if urgent else '주의'} · {room_label}")
-        title.setFont(QFont('', -1, QFont.Weight.Bold))
+        title.setStyleSheet("font-weight:700; font-size:13px; color:#111827; border:none;")
         body = QLabel(message)
         body.setWordWrap(True)
+        body.setStyleSheet("color:#6b7280; font-size:12px; border:none;")
         layout.addWidget(title)
         layout.addWidget(body)
 
@@ -158,22 +190,40 @@ class FallTab(QWidget):
         self.cards = {}          # track_id -> AlertCard (urgent 카드만 추적, 처리 완료 시 제거)
         self._camera_lookup = {cam_id: (room, patient) for cam_id, room, patient in FALL_CAMERAS}
 
-        root = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 20, 24, 20)
+        outer.setSpacing(12)
+
+        rooms = ', '.join(room for _, room, _ in FALL_CAMERAS)
+        desc = QLabel(
+            f"카메라 {len(FALL_CAMERAS)}대({rooms}, 침상마다 1대씩 고정 배정)를 "
+            f"상시 모니터링합니다. 낙상 확정 시 빨간 테두리, 추적 불안정 시 주황 테두리로 표시됩니다."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#6b7280; font-size:13px;")
+        outer.addWidget(desc)
+
+        content = QHBoxLayout()
+        content.setSpacing(16)
 
         grid_widget = QWidget()
         grid = QGridLayout(grid_widget)
+        grid.setSpacing(16)
         for i, (camera_id, room_label, patient_name) in enumerate(FALL_CAMERAS):
             box = FallCameraBox(camera_id, room_label, patient_name)
             self.boxes[camera_id] = box
             grid.addWidget(box, i // 2, i % 2)
-        root.addWidget(grid_widget, stretch=3)
+        content.addWidget(grid_widget, stretch=3)
 
         self.notif_stack = QVBoxLayout()
+        self.notif_stack.setSpacing(10)
         self.notif_stack.addStretch()
         notif_widget = QWidget()
         notif_widget.setLayout(self.notif_stack)
         notif_widget.setFixedWidth(280)
-        root.addWidget(notif_widget, stretch=1)
+        content.addWidget(notif_widget, stretch=1)
+
+        outer.addLayout(content)
 
     def render(self, camera_id, msg, frame):
         """result_receiver가 mode 0 메시지를 줄 때마다 admin_gui.py의 dispatch()가 호출"""

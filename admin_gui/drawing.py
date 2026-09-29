@@ -2,6 +2,7 @@
 """영상 프레임 위에 그리는 함수들 + 화면 크기 변환 유틸. 기존 admin_gui.py 초안의
 "mode별 그리기" 섹션을 그대로 옮겼다 — 로직은 안 건드림, import 경로만 정리."""
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -60,6 +61,25 @@ def score_color(score):
     if score >= 50:
         return (0, 255, 255)
     return (0, 0, 255)
+
+
+def draw_camera_overlay(frame, camera_id, room_label):
+    """영상 좌상단에 '카메라ID - 병실', 우상단에 시각 + REC 점 표시 (목업 스타일).
+    fit_to_view()로 480x360 등 뷰 크기에 맞춘 뒤 호출할 것 (원본 해상도에서 하면
+    텍스트가 리사이즈되면서 뭉개짐)."""
+    h, w = frame.shape[:2]
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (w, 32), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+
+    cv2.putText(frame, f"{camera_id} - {room_label}", (10, 21),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (235, 235, 235), 1, cv2.LINE_AA)
+
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+    (tw, _), _ = cv2.getTextSize(timestamp, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+    cv2.putText(frame, timestamp, (w - tw - 20, 21),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (210, 210, 210), 1, cv2.LINE_AA)
+    cv2.circle(frame, (w - tw - 32, 17), 4, (0, 0, 255), -1)
 
 
 def draw_fall(frame, data):

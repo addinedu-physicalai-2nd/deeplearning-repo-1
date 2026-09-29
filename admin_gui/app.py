@@ -30,6 +30,64 @@ from .stretch_tab import StretchingTab
 
 UPDATE_INTERVAL_MS = 30
 
+# 목업(gui_mockup_v5.html)과 맞춘 전역 스타일 — 탭 밑줄 강조, 카드 톤 배경 등.
+# 참고: OS가 그리는 실제 창 타이틀바(맨 위 제목줄)는 여기서 손댈 수 없다 —
+# 목업의 상단 바는 브라우저가 그린 가짜 macOS 창틀이라 실제 앱 창틀과는 다르다.
+STYLE_SHEET = """
+QMainWindow, QWidget {
+    background: #f7f8fa;
+    font-family: "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    font-size: 13px;
+    color: #111827;
+}
+QTabWidget::pane {
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    background: #ffffff;
+}
+QTabBar::tab {
+    background: transparent;
+    color: #6b7280;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    border-bottom: 2px solid transparent;
+}
+QTabBar::tab:selected {
+    color: #4f46e5;
+    border-bottom: 2px solid #4f46e5;
+}
+QTabBar::tab:hover:!selected {
+    color: #374151;
+}
+QListWidget {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+QLineEdit {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 5px 8px;
+}
+QPushButton {
+    background: #4f46e5;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: #4338ca;
+}
+QPushButton:disabled {
+    background: #c7c9d9;
+}
+"""
+
 
 class AdminWindow(QMainWindow):
     def __init__(self, stretch_dir='stretching'):
@@ -118,6 +176,7 @@ def main():
     args = parser.parse_args()
 
     app = QApplication([])
+    app.setStyleSheet(STYLE_SHEET)
     window = AdminWindow(stretch_dir=args.stretch_dir)
     window.resize(1400, 800)
     window.show()

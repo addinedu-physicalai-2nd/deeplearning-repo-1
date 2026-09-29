@@ -9,26 +9,27 @@ try:
     from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
     from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
     from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QFormLayout,
-                                 QFrame, QGridLayout, QHBoxLayout, QLabel,
-                                 QLineEdit, QListWidget, QListWidgetItem,
-                                 QMainWindow, QMessageBox, QPushButton,
-                                 QTabWidget, QVBoxLayout, QWidget)
+                                 QFrame, QGraphicsDropShadowEffect, QGridLayout,
+                                 QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                                 QListWidgetItem, QMainWindow, QMessageBox,
+                                 QPushButton, QTabWidget, QVBoxLayout, QWidget)
     PYQT_VERSION = 6
 except ImportError:
     from PyQt5.QtCore import Qt, QTimer, QRectF, pyqtSignal
     from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
     from PyQt5.QtWidgets import (QApplication, QComboBox, QDialog, QFormLayout,
-                                 QFrame, QGridLayout, QHBoxLayout, QLabel,
-                                 QLineEdit, QListWidget, QListWidgetItem,
-                                 QMainWindow, QMessageBox, QPushButton,
-                                 QTabWidget, QVBoxLayout, QWidget)
+                                 QFrame, QGraphicsDropShadowEffect, QGridLayout,
+                                 QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                                 QListWidgetItem, QMainWindow, QMessageBox,
+                                 QPushButton, QTabWidget, QVBoxLayout, QWidget)
     PYQT_VERSION = 5
 
 __all__ = [
     'Qt', 'QTimer', 'QRectF', 'pyqtSignal',
     'QColor', 'QFont', 'QImage', 'QPainter', 'QPen', 'QPixmap',
     'QApplication', 'QComboBox', 'QDialog', 'QFormLayout', 'QFrame',
-    'QGridLayout', 'QHBoxLayout', 'QLabel', 'QLineEdit', 'QListWidget',
-    'QListWidgetItem', 'QMainWindow', 'QMessageBox', 'QPushButton',
-    'QTabWidget', 'QVBoxLayout', 'QWidget', 'PYQT_VERSION',
+    'QGraphicsDropShadowEffect', 'QGridLayout', 'QHBoxLayout', 'QLabel',
+    'QLineEdit', 'QListWidget', 'QListWidgetItem', 'QMainWindow',
+    'QMessageBox', 'QPushButton', 'QTabWidget', 'QVBoxLayout', 'QWidget',
+    'PYQT_VERSION',
 ]
