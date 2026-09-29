@@ -1,5 +1,9 @@
 import numpy as np
 
+# 단계 기준 (GUI는 level만 보고 색을 정함)
+GOOD_SCORE = 70
+ADJUST_SCORE = 50
+
 class StretchingAnalyzer:
     """Main - 기준 자세와 비교 후 GUI 데이터 생성"""
     
@@ -69,7 +73,7 @@ class StretchingAnalyzer:
                 limbs_data[limb_name] = {
                     'angle': float(user_limb_angles[limb_name]),
                     'score': float(score),
-                    'color': self._get_color(score)
+                    'level': self._get_level(score)
                 }
                 limb_scores.append(score)
             
@@ -83,7 +87,7 @@ class StretchingAnalyzer:
                 spreads_data[spread_name] = {
                     'distance': float(user_spread_distances[spread_name]),
                     'score': float(score),
-                    'color': self._get_color(score)
+                    'level': self._get_level(score)
                 }
                 spread_scores.append(score)
             
@@ -94,31 +98,24 @@ class StretchingAnalyzer:
             
             # ============ 관절별 정확도 ============
             joint_accuracy = {
-                'shoulder': {'score': float(confidence * 100), 'color': self._get_color(confidence * 100)},
+                'shoulder': {'score': float(confidence * 100), 'level': self._get_level(confidence * 100)},
                 'elbow': {'score': float((limbs_data['left_arm']['score'] + limbs_data['right_arm']['score']) / 2),
-                         'color': self._get_color((limbs_data['left_arm']['score'] + limbs_data['right_arm']['score']) / 2)},
-                'wrist': {'score': spreads_data['arm_spread']['score'], 'color': spreads_data['arm_spread']['color']},
-                'hip': {'score': float(confidence * 100), 'color': self._get_color(confidence * 100)},
+                         'level': self._get_level((limbs_data['left_arm']['score'] + limbs_data['right_arm']['score']) / 2)},
+                'wrist': {'score': spreads_data['arm_spread']['score'], 'level': spreads_data['arm_spread']['level']},
+                'hip': {'score': float(confidence * 100), 'level': self._get_level(confidence * 100)},
                 'knee': {'score': float((limbs_data['left_leg']['score'] + limbs_data['right_leg']['score']) / 2),
-                        'color': self._get_color((limbs_data['left_leg']['score'] + limbs_data['right_leg']['score']) / 2)},
-                'ankle': {'score': spreads_data['leg_spread']['score'], 'color': spreads_data['leg_spread']['color']}
+                        'level': self._get_level((limbs_data['left_leg']['score'] + limbs_data['right_leg']['score']) / 2)},
+                'ankle': {'score': spreads_data['leg_spread']['score'], 'level': spreads_data['leg_spread']['level']}
             }
             
-            # ============ 피드백 ============
-            if overall_score >= 70:
-                feedback = 'GOOD'
-                feedback_color = (0, 255, 0)
-            elif overall_score >= 50:
-                feedback = 'ADJUST'
-                feedback_color = (0, 255, 255)
-            else:
-                feedback = 'CHECK'
-                feedback_color = (0, 0, 255)
+            # ============ 전체 피드백 (점수 + 단계) ============
+            overall = {
+                'score': float(overall_score),
+                'level': self._get_level(overall_score)
+            }
             
             tracking_data[track_id] = {
-                'overall_score': float(overall_score),
-                'feedback': feedback,
-                'feedback_color': feedback_color,
+                'overall': overall,
                 'limbs': limbs_data,
                 'spreads': spreads_data,
                 'joint_accuracy': joint_accuracy,
@@ -136,10 +133,11 @@ class StretchingAnalyzer:
         vec = keypoints[limb[1]] - keypoints[limb[0]]
         return float(np.degrees(np.arctan2(vec[1], vec[0])))
     
-    def _get_color(self, score):
-        if score >= 70:
-            return (0, 255, 0)
-        elif score >= 50:
-            return (0, 255, 255)
+    def _get_level(self, score):
+        """점수 → 단계 ('good' / 'adjust' / 'check'). 색은 GUI가 단계를 보고 정함"""
+        if score >= GOOD_SCORE:
+            return 'good'
+        elif score >= ADJUST_SCORE:
+            return 'adjust'
         else:
-            return (0, 0, 255)
+            return 'check'

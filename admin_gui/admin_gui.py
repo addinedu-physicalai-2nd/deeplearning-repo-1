@@ -42,6 +42,11 @@ FALL_COLOR = {'none': (0, 255, 0), 'orange': (0, 165, 255), 'red': (0, 0, 255)} 
 MODE_NAME = {0: 'FALL', 1: 'GAIT', 2: 'STRETCH'}
 MODE_STRETCH = 2
 
+# 스트레칭 단계 → 화면 표시 (단계 기준값은 main_server의 StretchingAnalyzer에만 있음)
+LEVEL_COLOR = {'good': (0, 255, 0), 'adjust': (0, 255, 255), 'check': (0, 0, 255)}   # BGR (OpenCV로 그림)
+LEVEL_TEXT = {'good': 'GOOD', 'adjust': 'ADJUST', 'check': 'CHECK'}
+UNKNOWN_COLOR = (200, 200, 200)
+
 # COCO-17 스켈레톤 (StretchingAnalyzer의 limbs / joint_accuracy 키와 대응)
 LIMB_LINES = {
     'left_arm': [(5, 7), (7, 9)],
@@ -251,9 +256,11 @@ def draw_stretch(frame, data):
 
     texts = []
     for track_id, info in tracking.items():
-        color = tuple(int(c) for c in info.get('feedback_color', (0, 255, 0)))   # BGR 그대로
-        draw_box(frame, info['bbox'], color, f"ID {track_id} {info['feedback']} {info['overall_score']:.0f}")
-        texts.append(f"ID {track_id}: {info['feedback']} {info['overall_score']:.0f}점")
+        overall = info['overall']
+        color = LEVEL_COLOR.get(overall['level'], UNKNOWN_COLOR)
+        label = LEVEL_TEXT.get(overall['level'], overall['level'])
+        draw_box(frame, info['bbox'], color, f"ID {track_id} {label} {overall['score']:.0f}")
+        texts.append(f"ID {track_id}: {label} {overall['score']:.0f}점")
     return " / ".join(texts)
 
 
@@ -450,16 +457,18 @@ class StretchingTab(QWidget):
         else:
             texts = []
             for track_id, info in tracking.items():
-                limb_colors = {k: v['color'] for k, v in info.get('limbs', {}).items()}
-                joint_colors = {k: v['color'] for k, v in info.get('joint_accuracy', {}).items()}
+                limb_colors = {k: LEVEL_COLOR.get(v['level'], UNKNOWN_COLOR) for k, v in info.get('limbs', {}).items()}
+                joint_colors = {k: LEVEL_COLOR.get(v['level'], UNKNOWN_COLOR) for k, v in info.get('joint_accuracy', {}).items()}
                 if info.get('keypoints_px'):
                     draw_skeleton(frame, info['keypoints_px'], limb_colors, joint_colors)
-                color = tuple(int(c) for c in info.get('feedback_color', (0, 255, 0)))
+                overall = info['overall']
+                color = LEVEL_COLOR.get(overall['level'], UNKNOWN_COLOR)
+                label = LEVEL_TEXT.get(overall['level'], overall['level'])
                 x1, y1 = int(info['bbox'][0]), int(info['bbox'][1])
-                cv2.putText(frame, f"{info['feedback']} {info['overall_score']:.0f}",
+                cv2.putText(frame, f"{label} {overall['score']:.0f}",
                             (x1, max(30, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
                 limbs = ", ".join(f"{k} {v['score']:.0f}" for k, v in info.get('limbs', {}).items())
-                texts.append(f"ID {track_id}: {info['feedback']} {info['overall_score']:.0f}점 ({limbs})")
+                texts.append(f"ID {track_id}: {label} {overall['score']:.0f}점 ({limbs})")
             summary = " / ".join(texts)
 
         self.my_view.setPixmap(to_pixmap(fit_to_view(frame)))
