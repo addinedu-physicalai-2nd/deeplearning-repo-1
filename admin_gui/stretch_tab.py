@@ -13,16 +13,19 @@
   - 우측: 기준 동작 영상 + 실시간 카메라 영상을 크게 나란히 보여주고,
     그 아래에 스트레칭 코스 선택 목록 + 시작 버튼을 둔다.
 
-종합 판정(1~5단계) 패널은 따로 두지 않는다 — 실시간으로 우측 영상 자체에
-스켈레톤 색 + 작은 뱃지로 바로 찍어버리면 되므로 별도 패널은 불필요
-(draw_stretch_badge, drawing.py).
+종합 판정(good/adjust/check 3단계) 패널은 따로 두지 않는다 — 실시간으로 우측
+영상 자체에 스켈레톤 색 + 작은 뱃지로 바로 찍어버리면 되므로 별도 패널은 불필요
+(draw_stretch_badge, drawing.py). 부위별(limbs)/관절별(joint_accuracy) 판정도
+같은 3단계 값을 주므로, 스켈레톤은 부위마다 그 색으로 따로 그린다.
 
 동작:
   1) 환자(카메라)와 스트레칭 코스를 고른 뒤 "시작"을 누르면
-  2) 좌측 영상에 그 코스의 기준 동작 영상(사람이 스트레칭하는 시범 영상)이 반복 재생된다
-     — 환자는 이 화면을 보면서 따라한다.
+  2) 좌측 영상에 그 코스의 기준 동작 영상(사람이 스트레칭하는 시범 영상)이 재생된다
+     — 환자는 이 화면을 보면서 따라한다. 영상이 끝나면 반복 재생하지 않고 마지막
+     프레임에서 멈춘다.
   3) main_server에 start_stretching 명령(기준 자세 JSON 절대경로 포함)을 보낸다.
-  4) 우측 영상에는 그 환자의 실시간 카메라 영상 + 스켈레톤 + 판정 뱃지를 보여준다.
+  4) 우측 영상에는 그 환자의 실시간 카메라 영상(거울처럼 좌우 반전) + 부위별 색이
+     입혀진 스켈레톤 + 판정 뱃지를 보여준다.
 """
 import os
 import re
@@ -67,6 +70,22 @@ def list_courses(stretch_dir):
         })
     courses.sort(key=lambda c: c['order'])
     return courses
+
+
+def _mirror_keypoints(keypoints, frame_width):
+    """실시간 카메라 프레임을 cv2.flip(frame, 1)로 좌우 반전해서 보여줄 것이므로,
+    그 위에 그릴 keypoints의 x좌표도 같은 기준(프레임 폭)으로 반전시켜야 스켈레톤이
+    반전된 영상 위치와 어긋나지 않는다. YOLO가 못 찾은 점은 (0, 0)으로 오는데, 그걸
+    그대로 반전하면 (width, 0)이 되어 "화면 오른쪽 끝에 보이는 점"으로 잘못
+    인식되므로 (0, 0)은 반전하지 않고 그대로 둔다."""
+    mirrored = []
+    for p in keypoints:
+        x, y = p[0], p[1]
+        if x == 0 and y == 0:
+            mirrored.append((0, 0))
+        else:
+            mirrored.append((frame_width - x, y))
+    return mirrored
 
 
 class StretchingTab(QWidget):
@@ -225,7 +244,8 @@ class StretchingTab(QWidget):
         })
 
     def _start_reference_player(self, video_path):
-        """좌측 '기준 동작' 영상을 반복 재생 (환자가 보고 따라할 실제 시범 영상)"""
+        """좌측 '기준 동작' 영상 재생 (환자가 보고 따라할 실제 시범 영상).
+        끝까지 재생되면 반복하지 않고 마지막 프레임에서 멈춘다(_next_ref_frame 참고)."""
         self.ref_timer.stop()
         if self.ref_cap is not None:
             self.ref_cap.release()
@@ -241,10 +261,11 @@ class StretchingTab(QWidget):
             return
         ok, frame = self.ref_cap.read()
         if not ok:
-            self.ref_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)   # 끝나면 처음부터 반복 재생
-            ok, frame = self.ref_cap.read()
-        if ok:
-            self.ref_view.setPixmap(to_pixmap(fit_to_view(frame, VIEW_W, VIEW_H)))
+            # 기준 동작 영상은 반복 재생하지 않는다 — 끝나면 타이머만 멈추고
+            # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다.
+            self.ref_timer.stop()
+            return
+        self.ref_view.setPixmap(to_pixmap(fit_to_view(frame, VIEW_W, VIEW_H)))
 
     def stop(self):
         """앱 종료 시 정리용 (app.py의 closeEvent에서 호출)"""
@@ -256,11 +277,18 @@ class StretchingTab(QWidget):
     def on_result(self, camera_id, msg, frame):
         """result_receiver가 mode 2 메시지를 줄 때마다 app.py의 dispatch()가 호출.
         frame은 app.py가 이미 FrameStore에서 꺼내 cv2.imdecode까지 해둔 것 —
-        우측 '실시간 카메라' 화면이 바로 이 프레임이다."""
+        우측 '실시간 카메라' 화면이 바로 이 프레임이다.
+
+        실시간 카메라는 환자가 거울 보듯 자연스럽게 보도록 좌우 반전해서 보여준다.
+        반전은 스켈레톤/뱃지를 그리기 전에 원본 프레임에 먼저 적용한다 — 그래야
+        뱃지 점수 텍스트가 거꾸로 뒤집혀 나오지 않고, keypoints도 같은 기준(프레임
+        폭)으로 같이 반전시켜서 스켈레톤이 반전된 영상과 어긋나지 않게 맞춘다."""
         if camera_id != self.active_camera_id:
             return
         data = msg.get('data', {})
         tracking = data.get('tracking_data', {})
+
+        frame = cv2.flip(frame, 1)   # 거울 모드 — 좌우 반전
 
         if not tracking:
             view = fit_to_view(frame, VIEW_W, VIEW_H)
@@ -271,12 +299,22 @@ class StretchingTab(QWidget):
         # 화면에는 한 명만 표시 (첫 번째 track)
         track_id, info = next(iter(tracking.items()))
         overall = info.get('overall', {})
-        level = overall.get('level')          # 1(안 맞음) ~ 5(잘 맞음) — 부위별 세부 없음
+        level = overall.get('level')          # 'good'/'adjust'/'check' — overall 종합 판정
         score = overall.get('score', 0)
 
+        # limbs(부위별)/joint_accuracy(관절별)도 각각 같은 3단계 값을 주므로, 스켈레톤을
+        # 한 가지 색이 아니라 부위마다 다른 색으로 그린다(안 맞는 부위만 빨갛게 보이게).
+        frame_w = frame.shape[1]
+        keypoints = _mirror_keypoints(info.get('keypoints_px', []), frame_w)
+        limb_colors = {name: LEVEL_COLOR.get(v.get('level'), UNKNOWN_COLOR)
+                       for name, v in info.get('limbs', {}).items()}
+        joint_colors = {name: LEVEL_COLOR.get(v.get('level'), UNKNOWN_COLOR)
+                        for name, v in info.get('joint_accuracy', {}).items()}
+
         # fit_to_view 이후의 keypoints는 원본 해상도 좌표라 좌표가 안 맞을 수 있으므로,
-        # 스켈레톤은 원본 frame에 먼저 그리고 그 다음에 뷰 크기로 맞춘다.
-        draw_skeleton(frame, info.get('keypoints_px', []), default=LEVEL_COLOR.get(level, UNKNOWN_COLOR))
+        # 스켈레톤은 원본 frame(반전 이미 적용됨)에 먼저 그리고 그 다음에 뷰 크기로 맞춘다.
+        draw_skeleton(frame, keypoints, limb_colors, joint_colors,
+                      default=LEVEL_COLOR.get(level, UNKNOWN_COLOR))
         view = fit_to_view(frame, VIEW_W, VIEW_H)
         draw_stretch_badge(view, level, score)
         self.my_view.setPixmap(to_pixmap(view))

@@ -14,23 +14,23 @@ VIEW_W, VIEW_H = 480, 360
 
 FALL_COLOR = {'none': (0, 255, 0), 'orange': (0, 165, 255), 'red': (0, 0, 255)}   # BGR
 
-# 스트레칭 판정 — 부위별이 아니라 "전체적으로 얼마나 맞는지"를 1~5단계로만 준다.
-# (단계 기준값 자체는 main_server의 StretchingAnalyzer에만 있고, GUI는 level 값만 받아
-# 색으로 표시한다.) 1단계=가장 안 맞음(빨강) ~ 5단계=가장 잘 맞음(초록).
-# LEVEL_COLOR: OpenCV용 BGR, LEVEL_HEX: Qt 스타일시트용 hex — 같은 5색을 두 형식으로.
+# 스트레칭 판정 — 실제 main_service/stretching_analyzer.py가 주는 level은 숫자
+# 1~5단계가 아니라 'good'/'adjust'/'check' 3단계 문자열이다. (화면에 "Lv.check"라고
+# 그대로 찍히던 게 그 증거 — 예전에 여기 int 키 딕셔너리를 쓰고 있어서 'check' 같은
+# 문자열 키가 하나도 안 걸리고 전부 UNKNOWN_COLOR로만 그려지는 바람에 스켈레톤이
+# 흑백처럼 보였다.) overall뿐 아니라 limbs/joint_accuracy도 부위별로 각각 이 3단계
+# 중 하나를 주므로, stretch_tab.py에서 부위별 색으로 draw_skeleton에 넘긴다.
+# LEVEL_COLOR: OpenCV용 BGR, LEVEL_HEX: Qt 스타일시트용 hex — 같은 색을 두 형식으로.
 LEVEL_COLOR = {
-    1: (0, 0, 220),
-    2: (0, 111, 255),
-    3: (0, 210, 220),
-    4: (100, 200, 130),
-    5: (0, 160, 0),
+    'good': (0, 200, 0),       # 초록 — 잘 맞음
+    'adjust': (0, 200, 230),   # 노랑 — 약간 보정 필요
+    'check': (0, 0, 230),      # 빨강 — 확인 필요
 }
+LEVEL_TEXT = {'good': '양호', 'adjust': '보정 필요', 'check': '확인 필요'}
 LEVEL_HEX = {
-    1: '#dc2f2f',
-    2: '#e8720d',
-    3: '#dcb400',
-    4: '#66b34d',
-    5: '#1f9d3c',
+    'good': '#1f9d3c',
+    'adjust': '#e0b400',
+    'check': '#dc2f2f',
 }
 UNKNOWN_COLOR = (200, 200, 200)
 UNKNOWN_HEX = '#9aa2ae'
@@ -84,9 +84,11 @@ def draw_camera_overlay(frame, camera_id, room_label):
 
 def draw_stretch_badge(frame, level, score):
     """스트레칭 종합 판정을 옆 패널 대신 영상 우측 상단에 직접 찍는다.
-    level: 1(안 맞음)~5(잘 맞음), 없으면 회색 '판정 대기'로 표시. score: 0~100."""
+    level: 'good'/'adjust'/'check' 문자열, 없으면 회색 '판정 대기'로 표시. score: 0~100.
+    2026-09: "Lv.check" 같은 내부 라벨 문구는 화면에 노출하지 않고 점수만 보여준다
+    (배경색으로는 계속 good/adjust/check 판정을 구분해서 보여준다)."""
     color = LEVEL_COLOR.get(level, UNKNOWN_COLOR)
-    label = f"Lv.{level} - {score:.0f}" if level else "waiting"
+    label = f"{score:.0f}점" if level else "판정 대기"
     h, w = frame.shape[:2]
     (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
     pad_x, pad_y = 14, 10
@@ -130,7 +132,7 @@ def draw_gait(frame, data):
 
 def draw_stretch(frame, data):
     """참고용 — 실제 스트레칭 탭 그리기는 stretch_tab.py의 on_result()가 직접 한다.
-    전체 종합 판정(1~5단계)만 있고 부위별 판정은 없음."""
+    전체 종합 판정(good/adjust/check)만 예시로 텍스트로 찍어본다."""
     if 'tracking_data' not in data:
         for det in data.get('detections', []):
             draw_box(frame, det['bbox'], (255, 255, 0), f"ID {det['track_id']}")
@@ -145,8 +147,9 @@ def draw_stretch(frame, data):
         overall = info['overall']
         level = overall.get('level')
         color = LEVEL_COLOR.get(level, UNKNOWN_COLOR)
-        draw_box(frame, info['bbox'], color, f"ID {track_id} {level}단계 {overall.get('score', 0):.0f}")
-        texts.append(f"ID {track_id}: {level}단계 {overall.get('score', 0):.0f}점")
+        label = LEVEL_TEXT.get(level, level or '-')
+        draw_box(frame, info['bbox'], color, f"ID {track_id} {label} {overall.get('score', 0):.0f}")
+        texts.append(f"ID {track_id}: {label} {overall.get('score', 0):.0f}점")
     return " / ".join(texts)
 
 
