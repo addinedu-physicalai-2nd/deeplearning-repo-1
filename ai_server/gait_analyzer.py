@@ -147,7 +147,8 @@ class GaitAnalyzerSession:
                         'gait_score': gait_score,
                         'disease_scores': realtime_scores,         # 🔥 실시간 확률
                         'cumulative_scores': cumulative_scores,    # 🔥 누적 평균 확률
-                        'confidence': 1.0
+                        'confidence': 1.0,
+                        'keypoints_px': np.asarray(kpts)[:, :2].tolist()   # GUI에서 영상 위에 그릴 원본 픽셀 좌표
                     }
                 )
                 detections.append(detection)

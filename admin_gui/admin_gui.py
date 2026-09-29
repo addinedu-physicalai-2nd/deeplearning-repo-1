@@ -239,6 +239,8 @@ def draw_gait(frame, data):
         score = raw.get('gait_score', 0.0)
         cumulative = raw.get('cumulative_scores', {})
         top = max(cumulative, key=cumulative.get) if cumulative else '-'
+        if raw.get('keypoints_px'):
+            draw_skeleton(frame, raw['keypoints_px'], default=score_color(score))
         draw_box(frame, det['bbox'], score_color(score), f"ID {det['track_id']} gait {score:.0f}")
         texts.append(f"ID {det['track_id']}: {top} {cumulative.get(top, 0.0):.2f}")
     return " / ".join(texts)
