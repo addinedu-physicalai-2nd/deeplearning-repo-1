@@ -105,6 +105,7 @@ class StretchingManager:
         
         return {
             'keypoints': normalized_kp.tolist(),  # Main에서 호모그래피 적용용
+            'keypoints_px': raw_kp[:, :2].tolist(),  # GUI에서 영상 위에 그릴 원본 픽셀 좌표
             'limb_angles': limb_angles,
             'spread_distances': spread_distances,
             'confidence': confidence
