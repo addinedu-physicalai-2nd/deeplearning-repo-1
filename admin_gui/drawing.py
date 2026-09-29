@@ -102,6 +102,41 @@ def draw_stretch_badge(frame, level, score):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
 
 
+def draw_session_result(width, height, avg_score=None, course_label=None):
+    """스트레칭 세션이 끝난 직후 '실시간 카메라' 자리에 그대로 박아 넣는 결과 화면.
+    화면을 완전히 검정으로 덮고 가운데에 코스 이름(있으면) + 평균 점수를 크게 찍는다.
+    avg_score가 없으면(완료 못 하고 종료된 경우) 점수 없이 "측정 결과 없음"만 표시.
+    점수 색은 score_color()로 통일 — 스트레칭 good/adjust/check 3단계가 아니라
+    0~100 평균 점수 자체의 높낮이를 보여주는 것이므로 기존 낙상/보행에서 쓰던
+    70/50 기준의 score_color 팔레트를 그대로 쓴다."""
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)   # 완전 검정
+    cx = width // 2
+    cy = height // 2
+
+    if course_label:
+        (tw, _), _ = cv2.getTextSize(course_label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.putText(canvas, course_label, (cx - tw // 2, cy - 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (190, 190, 190), 2, cv2.LINE_AA)
+
+    if avg_score is None:
+        label = "측정 결과 없음"
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        cv2.putText(canvas, label, (cx - tw // 2, cy + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (150, 150, 150), 2, cv2.LINE_AA)
+        return canvas
+
+    label = "평균 점수"
+    (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+    cv2.putText(canvas, label, (cx - tw // 2, cy - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (170, 170, 170), 2, cv2.LINE_AA)
+
+    score_text = f"{avg_score:.0f}점"
+    (tw, _), _ = cv2.getTextSize(score_text, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 5)
+    cv2.putText(canvas, score_text, (cx - tw // 2, cy + 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 2.0, score_color(avg_score), 5, cv2.LINE_AA)
+    return canvas
+
+
 def draw_fall(frame, data):
     """낙상 탭용 — bbox를 프레임에 직접 그림. 테두리 색/팝업 로직은 fall_tab.py에서 담당."""
     for track in data.get('tracks', []):
