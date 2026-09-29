@@ -8,9 +8,12 @@
 그대로 보여주고, 요양보호사명만 입력하면 "처리 완료" 버튼이 활성화된다.
 주의(주황) 카드는 클릭하면 바로 닫힌다(목업과 동일).
 
-resolve_fall 명령은 main_server 쪽에 아직 없음 (작업 지시서 기준) — 여기서는
-전송 코드까지만 만들어두고, 화면은 로컬에서 낙관적으로 정상 상태로 되돌린다.
-서버가 명령을 지원하게 되면 MainLink.send() 호출 자체는 그대로 쓰면 된다.
+처리 완료는 db_client.resolve_fall()로 main_server에 요청한다 — 서버가 그
+요청을 받으면 FallAnalyzer 상태를 초기화하고 fall_logs에 처리완료를 기록한다.
+화면은 응답을 기다리지 않고 로컬에서 낙관적으로 먼저 정상 상태로 되돌린다.
+낙상/주의 이벤트 자체는 main_server가 FallAnalyzer 결과를 받는 즉시 직접
+기록하므로(db_client.py 주석 참고), GUI가 따로 로그 기록 요청을 보내지 않는다
+— 카드 하단 "낙상 로그" 목록은 순수하게 화면에 보여주기 위한 로컬 UI 이력이다.
 
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
@@ -19,7 +22,7 @@ badge에 setFixedHeight를 줘서 막는다.
 """
 import time
 
-from . import db_stub
+from . import db_client
 from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
 from .qt_compat import (
     Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGraphicsDropShadowEffect,
@@ -291,7 +294,8 @@ class FallTab(QWidget):
         for event in data.get('events', []):
             track_id = event.get('track_id')
             name = event.get('event', '')
-            db_stub.log_event(camera_id, track_id, name)
+            # 낙상/주의 이벤트 자체는 main_server가 이미 직접 기록하므로 여기서
+            # DB에 따로 요청을 보내지 않는다 — add_log_entry는 화면용 로컬 이력.
             if name.endswith('TO_ALERT'):
                 box.add_log_entry("낙상 감지")
                 self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=True,
@@ -317,16 +321,9 @@ class FallTab(QWidget):
         dialog = ResolveFallDialog(room_label, patient_name, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             patient_name, caregiver_name = dialog.values()
-            db_stub.resolve_fall_event(camera_id, track_id, patient_name, caregiver_name)
-            # main_server가 아직 resolve_fall 명령을 처리하지 않음 (지시서 기준) —
-            # 전송 코드만 미리 만들어둠. 서버 지원되면 이 send() 호출은 그대로 유효.
-            self.link.send({
-                "cmd": "resolve_fall",
-                "camera_id": camera_id,
-                "track_id": track_id,
-                "patient_name": patient_name,
-                "caregiver_name": caregiver_name,
-            })
+            # main_server에 처리 완료 요청 — 서버가 FallAnalyzer 상태 초기화 +
+            # fall_logs에 처리완료를 기록한다 (db_client.py 참고).
+            db_client.resolve_fall(camera_id, track_id, caregiver_name)
             box = self.boxes.get(camera_id)
             if box is not None:
                 box.set_state('normal')   # 서버 응답 전까지 화면상 낙관적 처리
