@@ -79,14 +79,14 @@ class DBManager:
 
     # ============ 환자 ============
     def get_patients(self):
-        """카메라가 배정된 환자 목록 (CAMERA_PATIENTS에 없는 환자는 제외). 조회 실패 시 None (빈 목록과 구분)"""
+        """전체 환자 목록. camera_id는 낙상(병실) 카메라 배정이고 없으면 None. 조회 실패 시 None (빈 목록과 구분)"""
         if not self.enabled:
             return None
         try:
             rows = self._execute(
                 "SELECT id, name, age, room_number, caregiver_name FROM patients "
                 "ORDER BY room_number, name", fetch='all')
-            return [self._patient_row(r) for r in rows if r['id'] in self.camera_by_patient]
+            return [self._patient_row(r) for r in rows]
         except Exception as e:
             self.logger.error(f"get_patients failed: {e}")
             return None
@@ -159,12 +159,13 @@ class DBManager:
             return False
 
     # ============ 보행 ============
-    def save_gait_session(self, patient_id, cumulative_scores):
-        """cumulative_scores: gait_analyzer 출력 그대로 (0~1 비율) → DB에는 % (0~100)로 저장"""
+    def save_gait_session(self, patient_id, cumulative_scores, camera_id=None):
+        """cumulative_scores: gait_analyzer 출력 그대로 (0~1 비율) → DB에는 % (0~100)로 저장
+        camera_id: 측정한 카메라 (GUI 보행 탭에서 고른 카메라). 없으면 병실 배정 카메라"""
         if not self.enabled:
             return False
         try:
-            camera_id = self.camera_by_patient.get(int(patient_id))
+            camera_id = camera_id or self.camera_by_patient.get(int(patient_id))
             percents = [round(float(cumulative_scores.get(col, 0.0)) * 100, 2) for col in GAIT_COLUMNS]
             self._execute(
                 "INSERT INTO gait_logs (patient_id, camera_id, checking_at, "

@@ -96,7 +96,8 @@ class MainService:
             self._reply(cmd, patients is not None, patients or [])
             return
         if name == 'save_gait_session':
-            ok = self.db.save_gait_session(cmd.get('patient_id'), cmd.get('cumulative_scores') or {})
+            ok = self.db.save_gait_session(cmd.get('patient_id'), cmd.get('cumulative_scores') or {},
+                                           camera_id=cmd.get('camera_id'))
             self._reply(cmd, ok)
             return
 

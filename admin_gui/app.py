@@ -21,8 +21,7 @@ import threading
 import cv2
 import numpy as np
 
-from . import db_stub
-from . import patients as patients_module
+from . import db_client
 from .drawing import draw_fall, draw_gait
 from .fall_tab import FallTab
 from .gait_tab import GaitTab
@@ -118,7 +117,7 @@ class AdminWindow(QMainWindow):
 
         self.store = FrameStore()
         self.link = MainLink()
-        db_stub.set_link(self.link)
+        db_client.set_link(self.link)
         self.was_connected = False          # main_server 연결 시점을 감지해서 환자 목록 요청
         self.result_queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -182,7 +181,7 @@ class AdminWindow(QMainWindow):
         """QTimer(30ms)에서만 호출 — 여기서만 Qt 위젯을 갱신한다."""
         connected = self.link.conn is not None
         if connected and not self.was_connected:
-            db_stub.request_patients()      # main_server에 붙자마자 DB 환자 목록 요청
+            db_client.request_patients()    # main_server에 붙자마자 DB 환자 목록 요청
         self.was_connected = connected
 
         while True:
@@ -201,7 +200,7 @@ class AdminWindow(QMainWindow):
                 print(f"[GUI] 요청 실패: {cmd} (req_id={msg.get('req_id')})")
                 return
             if cmd == 'get_patients':
-                patients = patients_module.set_patients(msg.get('data') or [])
+                patients = db_client.to_patients(msg.get('data') or [])
                 self.gait_tab.set_patients(patients)
                 self.stretch_tab.set_patients(patients)
                 print(f"[GUI] 환자 {len(patients)}명 로드")

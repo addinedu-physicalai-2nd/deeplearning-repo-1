@@ -8,9 +8,10 @@
 그대로 보여주고, 요양보호사명만 입력하면 "처리 완료" 버튼이 활성화된다.
 주의(주황) 카드는 클릭하면 바로 닫힌다(목업과 동일).
 
-resolve_fall 명령은 main_server 쪽에 아직 없음 (작업 지시서 기준) — 여기서는
-전송 코드까지만 만들어두고, 화면은 로컬에서 낙관적으로 정상 상태로 되돌린다.
-서버가 명령을 지원하게 되면 MainLink.send() 호출 자체는 그대로 쓰면 된다.
+DB 기록: 주의/낙상 이벤트는 main_server가 직접 fall_logs에 기록한다(GUI는 표시만).
+"처리 완료"를 누르면 db_client.resolve_fall()로 main_server에 알리고, main_server가
+FallAnalyzer 상태 초기화 + fall_logs 처리완료 기록을 한다. 화면은 응답을 기다리지 않고
+바로 정상 상태로 되돌린다.
 
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
@@ -19,7 +20,7 @@ badge에 setFixedHeight를 줘서 막는다. status_label도 마찬가지로 고
 주고, 카드 맨 아래에 addStretch()를 둬서 남는 공간을 거기서 흡수하게 한다
 (안 그러면 status_label이 늘어나서 영상 밑에 텅 빈 회색 박스처럼 보인다).
 """
-from . import db_stub
+from . import db_client
 from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
 from .qt_compat import (
     Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGraphicsDropShadowEffect,
@@ -29,7 +30,8 @@ from .qt_compat import (
 
 # 카메라(=침상) ↔ 환자 1:1 고정 매칭.
 # TODO(DB 연동 담당자): 더미값 — 실제 병상-환자 배정 테이블 조회로 교체 필요.
-FALL_CAMERAS = [('CAM-01', '101호', '김철수'), ('CAM-02', '102호', '홍길동')]
+# config/settings.py의 CAMERA_PATIENTS(낙상 기록용 배정) + DB patients 이름/병실과 맞춰둠 — 바꿀 땐 둘 다 수정
+FALL_CAMERAS = [('CAM-01', '301호', '김철수'), ('CAM-02', '302호', '이영희')]
 
 STATE_BORDER = {'normal': '#e5e7eb', 'checking': '#f59e0b', 'alert': '#ef4444'}
 STATE_BADGE_TEXT = {'normal': '정상', 'checking': '확인 필요', 'alert': '낙상 감지'}
@@ -244,7 +246,6 @@ class FallTab(QWidget):
         for event in data.get('events', []):
             track_id = event.get('track_id')
             name = event.get('event', '')
-            db_stub.log_event(camera_id, track_id, name)
             if name.endswith('TO_ALERT'):
                 self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=True,
                                       message="낙상이 감지되었습니다. 확인 후 처리해주세요.")
@@ -266,16 +267,7 @@ class FallTab(QWidget):
         dialog = ResolveFallDialog(room_label, patient_name, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             patient_name, caregiver_name = dialog.values()
-            db_stub.resolve_fall_event(camera_id, track_id, patient_name, caregiver_name)
-            # main_server가 아직 resolve_fall 명령을 처리하지 않음 (지시서 기준) —
-            # 전송 코드만 미리 만들어둠. 서버 지원되면 이 send() 호출은 그대로 유효.
-            self.link.send({
-                "cmd": "resolve_fall",
-                "camera_id": camera_id,
-                "track_id": track_id,
-                "patient_name": patient_name,
-                "caregiver_name": caregiver_name,
-            })
+            db_client.resolve_fall(camera_id, track_id, caregiver_name)
             box = self.boxes.get(camera_id)
             if box is not None:
                 box.set_state('normal')   # 서버 응답 전까지 화면상 낙관적 처리

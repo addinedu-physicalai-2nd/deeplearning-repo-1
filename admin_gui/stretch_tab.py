@@ -29,11 +29,11 @@ import re
 
 import cv2
 
-from . import patients as patients_module
 from .drawing import (LEVEL_COLOR, UNKNOWN_COLOR, draw_skeleton,
                        draw_stretch_badge, fit_to_view, to_pixmap)
+from config.settings import CAMERA_PORTS
 from .qt_compat import (
-    Qt, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    Qt, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
 )
 
@@ -80,7 +80,7 @@ class StretchingTab(QWidget):
         self.ref_timer.timeout.connect(self._next_ref_frame)
 
         self.courses = list_courses(stretch_dir)
-        self.patients = patients_module.get_patients()
+        self.patients = []          # main_server 연결 후 app.py가 set_patients()로 채움
 
         root = QHBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
@@ -89,6 +89,14 @@ class StretchingTab(QWidget):
         # 좌측: 환자(카메라) 검색 + 선택 — 보행 탭과 동일한 사이드바 구성
         left = QVBoxLayout()
         left.setSpacing(8)
+        # 스트레칭은 공용 카메라에서 측정 → 환자와 카메라를 따로 고른다 (환자는 전체 목록)
+        camera_title = QLabel("측정 카메라")
+        camera_title.setFont(QFont('', -1, QFont.Weight.Bold))
+        left.addWidget(camera_title)
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItems(list(CAMERA_PORTS))
+        left.addWidget(self.camera_combo)
+
         left_title = QLabel("환자 선택")
         left_title.setFont(QFont('', -1, QFont.Weight.Bold))
         left.addWidget(left_title)
@@ -200,9 +208,10 @@ class StretchingTab(QWidget):
         if course is None:
             return
 
-        self.active_camera_id = patient.camera_id
+        camera_id = self.camera_combo.currentText()
+        self.active_camera_id = camera_id
         self.ref_title.setText(f"기준 동작 — {course['label']}")
-        self.my_title.setText(f"실시간 카메라 — {patient.camera_id} · {patient.name}님")
+        self.my_title.setText(f"실시간 카메라 — {camera_id} · {patient.name}님")
 
         video_path = os.path.abspath(os.path.join(self.stretch_dir, course['video_filename']))
         skeleton_path = os.path.abspath(os.path.join(self.stretch_dir, course['skeleton_filename']))
@@ -210,7 +219,7 @@ class StretchingTab(QWidget):
 
         self.link.send({
             "cmd": "start_stretching",
-            "camera_id": patient.camera_id,
+            "camera_id": camera_id,
             "patient_id": patient.patient_id,
             "reference": skeleton_path,
         })

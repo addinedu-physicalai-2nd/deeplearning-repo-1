@@ -33,9 +33,9 @@ FALL_DETECTOR_MODEL = str(MODEL_DIR / 'fall_lstm.pt')
 
 # Stretching (모델 불필요)
 
-# ============ 카메라 ↔ 환자 배정 ============
+# ============ 낙상(병실) 카메라 ↔ 환자 배정 ============
 # DB patients 테이블에 카메라 컬럼이 없어서 여기서 1:1로 배정 (카메라 ID → patients.id)
-# 배정 안 된 환자는 GUI 환자 목록에 안 나옴
+# 낙상 기록에만 사용. 보행/스트레칭은 GUI에서 환자와 측정 카메라를 따로 고름
 CAMERA_PATIENTS = {
     'CAM-01': 1,   # 김철수
     'CAM-02': 2,   # 이영희

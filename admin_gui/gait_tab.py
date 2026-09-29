@@ -4,20 +4,20 @@
 "보행 분석 시작" 누르기 전에는 결과 없음(빈 상태) → 시작을 누르면
 main_server에 mode=1로 전환 명령을 보내고, 이후 들어오는 결과의
 cumulative_scores를 도넛 차트로 그린다. "중지"를 누르면 분석만 멈추고
-마지막 결과는 화면에 남겨둔다(목업 v2와 동일). "저장"은 db_stub에 위임.
+마지막 결과는 화면에 남겨둔다(목업 v2와 동일). "저장"은 db_client에 위임.
 
 주의: cumulative_scores의 키 이름(normal/parkinsons/stroke/myopathic/
 antalgic/abnormal)은 ai_server/models/의 모델 파일명(model_*.pth)에서
 추론한 것으로, 실제 gait_analyzer.py 출력과 다를 수 있다. 보행 데이터
 연동 담당자가 실제 키 이름으로 DISEASE_ORDER를 맞춰줘야 한다.
 """
+from config.settings import CAMERA_PORTS
 from .drawing import fit_to_view, to_pixmap
 from .qt_compat import (
-    Qt, QColor, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    Qt, QColor, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPainter, QPen, QPushButton, QRectF, QVBoxLayout, QWidget,
 )
-from . import db_stub
-from .patients import get_patients
+from . import db_client
 
 # TODO(보행 데이터 연동 담당자): 실제 gait_analyzer.py의 cumulative_scores 키와
 # 맞는지 확인/수정 필요. 현재는 ai_server/models/의 model_*.pth 파일명에서 추론.
@@ -82,14 +82,20 @@ class GaitTab(QWidget):
     def __init__(self, link):
         super().__init__()
         self.link = link
-        self.patients = get_patients()
+        self.patients = []          # main_server 연결 후 app.py가 set_patients()로 채움
         self.selected = None
         self.analyzing = False
 
         root = QHBoxLayout(self)
 
-        # 좌측: 환자 검색 + 목록
+        # 좌측: 측정 카메라 선택 + 환자 검색 + 목록
+        # 보행은 복도 공용 카메라에서 측정 → 환자와 카메라를 따로 고른다 (환자는 전체 목록)
         left = QVBoxLayout()
+        left.addWidget(QLabel("측정 카메라"))
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItems(list(CAMERA_PORTS))
+        left.addWidget(self.camera_combo)
+
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("환자 검색")
         self.search_input.textChanged.connect(self._filter_patients)
@@ -177,6 +183,7 @@ class GaitTab(QWidget):
         self.selected = item.data(Qt.ItemDataRole.UserRole)
         self.name_label.setText(f"{self.selected.name} · {self.selected.room}")
         self.analyzing = False
+        self.camera_combo.setEnabled(True)
         self.toggle_btn.setText("보행 분석 시작")
         self.toggle_btn.setEnabled(True)
         self.save_btn.setEnabled(False)
@@ -188,14 +195,19 @@ class GaitTab(QWidget):
         self.legend_label.hide()
         self.empty_label.show()
 
+    def _camera_id(self):
+        """지금 측정에 쓰는 카메라 (좌측 콤보박스)"""
+        return self.camera_combo.currentText()
+
     def _toggle_analysis(self):
         if self.selected is None:
             return
         self.analyzing = not self.analyzing
+        self.camera_combo.setEnabled(not self.analyzing)   # 분석 중에는 카메라 변경 막기
         if self.analyzing:
             self.toggle_btn.setText("분석 중지")
             self.status_badge.setText("분석 중")
-            self.link.send({"cmd": "set_mode", "camera_id": self.selected.camera_id, "mode": 1})
+            self.link.send({"cmd": "set_mode", "camera_id": self._camera_id(), "mode": 1})
         else:
             self.toggle_btn.setText("보행 분석 시작")
             self.status_badge.setText("중지됨")
@@ -204,19 +216,19 @@ class GaitTab(QWidget):
     def _save_session(self):
         if self.selected is None or not self.donut.scores:
             return
-        db_stub.save_gait_session(self.selected.patient_id, self.donut.scores)
+        db_client.save_gait_session(self.selected.patient_id, self.donut.scores, self._camera_id())
         self.save_btn.setText("✓ 저장됨")
         from .qt_compat import QTimer
         QTimer.singleShot(1500, lambda: self.save_btn.setText("저장"))
 
     def show_frame(self, camera_id, frame_bgr):
-        if self.selected is None or camera_id != self.selected.camera_id:
+        if self.selected is None or camera_id != self._camera_id():
             return
         self.video_label.setPixmap(to_pixmap(fit_to_view(frame_bgr, 480, 360)))
 
     def render(self, camera_id, msg):
         """result_receiver가 mode 1 메시지를 줄 때마다 admin_gui.py의 dispatch()가 호출"""
-        if self.selected is None or camera_id != self.selected.camera_id or not self.analyzing:
+        if self.selected is None or camera_id != self._camera_id() or not self.analyzing:
             return
         data = msg.get('data', {})
         detections = data.get('detections', [])
