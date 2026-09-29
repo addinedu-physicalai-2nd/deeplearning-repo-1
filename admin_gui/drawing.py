@@ -157,10 +157,15 @@ def draw_gait(frame, data):
         return None
     for det in detections:
         keypoints = det.get('keypoints_px') or det.get('keypoints')
+        if not keypoints:
+            # cumulative_scores가 det['raw_data']에 들어있는 것처럼(render() 참고),
+            # keypoints도 최상위가 아니라 raw_data 밑에 있을 수 있어서 한 번 더 찾아본다.
+            raw = det.get('raw_data', {})
+            keypoints = raw.get('keypoints_px') or raw.get('keypoints')
         if keypoints:
             draw_skeleton(frame, keypoints, default=GAIT_SKELETON_COLOR)
         else:
-            # keypoints가 아직 없는 경우를 대비한 폴백 (실제 스키마 확인되면 제거 가능)
+            # keypoints를 끝내 못 찾은 경우에만 bbox로 폴백 (실제 스키마 확인되면 제거 가능)
             draw_box(frame, det['bbox'], GAIT_SKELETON_COLOR, f"ID {det['track_id']}")
     return detections
 

@@ -8,30 +8,28 @@
 그대로 보여주고, 요양보호사명만 입력하면 "처리 완료" 버튼이 활성화된다.
 주의(주황) 카드는 클릭하면 바로 닫힌다(목업과 동일).
 
-DB 기록: 주의/낙상 이벤트는 main_server가 직접 fall_logs에 기록한다(GUI는 표시만).
-"처리 완료"를 누르면 db_client.resolve_fall()로 main_server에 알리고, main_server가
-FallAnalyzer 상태 초기화 + fall_logs 처리완료 기록을 한다. 화면은 응답을 기다리지 않고
-바로 정상 상태로 되돌린다.
+resolve_fall 명령은 main_server 쪽에 아직 없음 (작업 지시서 기준) — 여기서는
+전송 코드까지만 만들어두고, 화면은 로컬에서 낙관적으로 정상 상태로 되돌린다.
+서버가 명령을 지원하게 되면 MainLink.send() 호출 자체는 그대로 쓰면 된다.
 
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
 새어 들어가서 뱃지가 세로로 길게 늘어나는 버그가 생긴다 — header 컨테이너와
-badge에 setFixedHeight를 줘서 막는다. status_label도 마찬가지로 고정 높이를
-주고, 카드 맨 아래에 addStretch()를 둬서 남는 공간을 거기서 흡수하게 한다
-(안 그러면 status_label이 늘어나서 영상 밑에 텅 빈 회색 박스처럼 보인다).
+badge에 setFixedHeight를 줘서 막는다.
 """
-from . import db_client
+import time
+
+from . import db_stub
 from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
 from .qt_compat import (
     Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGraphicsDropShadowEffect,
-    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
-    QWidget, pyqtSignal,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QPushButton, QVBoxLayout, QWidget, pyqtSignal,
 )
 
 # 카메라(=침상) ↔ 환자 1:1 고정 매칭.
 # TODO(DB 연동 담당자): 더미값 — 실제 병상-환자 배정 테이블 조회로 교체 필요.
-# config/settings.py의 CAMERA_PATIENTS(낙상 기록용 배정) + DB patients 이름/병실과 맞춰둠 — 바꿀 땐 둘 다 수정
-FALL_CAMERAS = [('CAM-01', '301호', '김철수'), ('CAM-02', '302호', '이영희')]
+FALL_CAMERAS = [('CAM-01', '101호', '김철수'), ('CAM-02', '102호', '홍길동')]
 
 STATE_BORDER = {'normal': '#e5e7eb', 'checking': '#f59e0b', 'alert': '#ef4444'}
 STATE_BADGE_TEXT = {'normal': '정상', 'checking': '확인 필요', 'alert': '낙상 감지'}
@@ -60,7 +58,9 @@ class FallCameraBox(QWidget):
         header = QHBoxLayout(header_container)
         header.setContentsMargins(0, 0, 0, 0)
 
-        name_label = QLabel(f"{room_label} · {patient_name}님")
+        # 카메라 = 침대 단위 모니터링(한 병실에 침대 여러 개 · 침대마다 카메라 1개)이라
+        # 헤더에 환자명까지 붙이면 오해의 소지가 있다 — 깔끔하게 병실 번호만 표시.
+        name_label = QLabel(room_label)
         name_label.setStyleSheet("font-size:15px; font-weight:600; color:#111827; border:none;")
 
         self.badge = QLabel(STATE_BADGE_TEXT['normal'])
@@ -76,14 +76,35 @@ class FallCameraBox(QWidget):
         self.video_label.setFixedSize(480, 360)
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.setStyleSheet("background:#0d0d10; border-radius:10px;")
-        layout.addWidget(self.video_label)
+        # 카드 너비가 그리드 열 너비만큼 넓어지는데 video_label은 고정 크기라,
+        # 정렬을 안 주면 QVBoxLayout 기본값(왼쪽 정렬)대로 카드 왼쪽에 치우쳐 보인다 —
+        # 가로 중앙 정렬로 카드 한가운데 오게 한다.
+        layout.addWidget(self.video_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.status_label = QLabel('-')
         self.status_label.setStyleSheet("color:#9ca3af; font-size:12px; border:none;")
         self.status_label.setFixedHeight(18)
         layout.addWidget(self.status_label)
-        # 카드가 그리드 행 높이에 맞춰 세로로 늘어나도 남는 공간이 status_label로
-        # 새어 들어가 "빈 회색 박스"처럼 보이지 않도록, 여기서 여유 공간을 흡수한다.
+
+        # 낙상 관련 로그 — 이 카메라(=침대)에서 발생한 이벤트를 최신순으로 쌓아서
+        # 보여주는 섹션. 영상/상태 뱃지와 별도로 눈에 보이는 이력을 남겨달라는
+        # 요청에 따라 카드를 세 번째 섹션으로 나눴다.
+        log_title = QLabel("낙상 로그")
+        log_title.setStyleSheet("font-size:12px; font-weight:600; color:#6b7280; border:none;")
+        layout.addWidget(log_title)
+
+        self.log_list = QListWidget()
+        self.log_list.setFixedHeight(110)
+        self.log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.log_list.setStyleSheet(
+            "QListWidget { font-size:11px; color:#374151; border:1px solid #e5e7eb; "
+            "border-radius:8px; background:#fafafa; } "
+            "QListWidget::item { padding:3px 6px; border:none; }"
+        )
+        layout.addWidget(self.log_list)
+
+        # 카드가 그리드 행 높이에 맞춰 세로로 늘어나도 남는 공간이 로그 목록으로
+        # 새어 들어가 크기가 들쑥날쑥해지지 않도록, 여기서 여유 공간을 흡수한다.
         layout.addStretch()
 
         self._apply_badge_style('normal')
@@ -122,6 +143,14 @@ class FallCameraBox(QWidget):
         view = fit_to_view(frame_bgr, 480, 360)
         draw_camera_overlay(view, self.camera_id, self.room_label)
         self.video_label.setPixmap(to_pixmap(view))
+
+    def add_log_entry(self, text):
+        """낙상 로그에 최신 이벤트를 맨 위에 쌓는다. 너무 길어지지 않게 최근
+        20개까지만 유지한다."""
+        timestamp = time.strftime('%H:%M:%S')
+        self.log_list.insertItem(0, QListWidgetItem(f"{timestamp}  {text}"))
+        while self.log_list.count() > 20:
+            self.log_list.takeItem(self.log_list.count() - 1)
 
 
 class AlertCard(QFrame):
@@ -214,13 +243,29 @@ class FallTab(QWidget):
             grid.addWidget(box, i // 2, i % 2)
         content.addWidget(grid_widget, stretch=3)
 
+        # 우측 알림 목록 — 낙상 팝업과는 별개의 "패널"임을 한눈에 알 수 있게
+        # 회색 배경 + "메시지 알림" 제목을 얹은 하나의 섹션으로 감싼다.
+        notif_panel = QWidget()
+        notif_panel.setObjectName("notifPanel")
+        notif_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        notif_panel.setStyleSheet(
+            "#notifPanel { background:#f3f4f6; border-radius:14px; }"
+        )
+        notif_panel_layout = QVBoxLayout(notif_panel)
+        notif_panel_layout.setContentsMargins(16, 14, 16, 14)
+        notif_panel_layout.setSpacing(10)
+
+        notif_title = QLabel("메시지 알림")
+        notif_title.setStyleSheet("font-size:14px; font-weight:700; color:#111827; border:none;")
+        notif_panel_layout.addWidget(notif_title)
+
         self.notif_stack = QVBoxLayout()
         self.notif_stack.setSpacing(10)
         self.notif_stack.addStretch()
-        notif_widget = QWidget()
-        notif_widget.setLayout(self.notif_stack)
-        notif_widget.setFixedWidth(280)
-        content.addWidget(notif_widget, stretch=1)
+        notif_panel_layout.addLayout(self.notif_stack)
+
+        notif_panel.setFixedWidth(280)
+        content.addWidget(notif_panel, stretch=1)
 
         outer.addLayout(content)
 
@@ -246,15 +291,20 @@ class FallTab(QWidget):
         for event in data.get('events', []):
             track_id = event.get('track_id')
             name = event.get('event', '')
+            db_stub.log_event(camera_id, track_id, name)
             if name.endswith('TO_ALERT'):
+                box.add_log_entry("낙상 감지")
                 self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=True,
                                       message="낙상이 감지되었습니다. 확인 후 처리해주세요.")
             elif name.endswith('TO_CHECKING'):
+                box.add_log_entry("자세 확인 필요")
                 self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=False,
                                       message="자세 확인이 필요합니다.")
 
     def _add_alert_card(self, camera_id, room_label, patient_name, track_id, urgent, message):
-        card = AlertCard(f"{room_label} · {patient_name}님", urgent, message)
+        # 알림 카드 제목도 카드 헤더와 통일 — 환자명 없이 병실 번호만 (침대별
+        # 카메라라 환자명을 붙이면 오해의 소지가 있음). 처리 팝업에서는 환자명을 보여준다.
+        card = AlertCard(room_label, urgent, message)
         if urgent:
             card.clicked.connect(
                 lambda: self._handle_urgent_click(camera_id, room_label, patient_name, track_id, card))
@@ -267,9 +317,19 @@ class FallTab(QWidget):
         dialog = ResolveFallDialog(room_label, patient_name, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             patient_name, caregiver_name = dialog.values()
-            db_client.resolve_fall(camera_id, track_id, caregiver_name)
+            db_stub.resolve_fall_event(camera_id, track_id, patient_name, caregiver_name)
+            # main_server가 아직 resolve_fall 명령을 처리하지 않음 (지시서 기준) —
+            # 전송 코드만 미리 만들어둠. 서버 지원되면 이 send() 호출은 그대로 유효.
+            self.link.send({
+                "cmd": "resolve_fall",
+                "camera_id": camera_id,
+                "track_id": track_id,
+                "patient_name": patient_name,
+                "caregiver_name": caregiver_name,
+            })
             box = self.boxes.get(camera_id)
             if box is not None:
                 box.set_state('normal')   # 서버 응답 전까지 화면상 낙관적 처리
+                box.add_log_entry(f"{caregiver_name}님이 처리 완료")
             card.remove()
             self.cards.pop(track_id, None)

@@ -26,8 +26,8 @@
   3) main_server에 start_stretching 명령(기준 자세 JSON 절대경로 포함)을 보낸다.
   4) 우측 영상에는 그 환자의 실시간 카메라 영상(거울처럼 좌우 반전) + 부위별 색이
      입혀진 스켈레톤 + 판정 뱃지를 보여준다.
-  5) 세션이 끝나면(main_server가 종료 메시지를 보내면) 우측 화면을 즉시 멈추고
-     검정 화면으로 바꾼 뒤 평균 점수를 띄운다. (on_session_end 참고)
+  5) 좌측 기준 영상이 끝나는 순간, 서버 응답을 기다리지 않고 우측 화면을 즉시
+     멈추고 검정 결과 화면(코스 이름 + 평균 점수)으로 바꾼다 (_finish_session 참고).
 """
 import os
 import re
@@ -100,6 +100,10 @@ class StretchingTab(QWidget):
         # main_server가 뒤늦게 흘려보내는 mode=2 프레임이 있어도 on_result()가
         # 다시 덮어쓰지 않도록 이 플래그로 막는다. start_video()가 새로 누르면 해제.
         self.session_ended = False
+        # 이번 세션 동안 받은 프레임별 점수 — 좌측 기준 영상이 끝나는 순간 서버 응답을
+        # 기다리지 않고 이걸로 즉시 평균을 내서 우측 화면에 보여준다(동기화 목적).
+        self.score_history = []
+        self.active_course_label = None
         self.ref_cap = None
         self.ref_timer = QTimer()
         self.ref_timer.timeout.connect(self._next_ref_frame)
@@ -141,7 +145,11 @@ class StretchingTab(QWidget):
 
         # 우측: 영상 두 개(크게) + 그 아래 스트레칭 코스 선택 + 시작 버튼
         right = QVBoxLayout()
-        right.setSpacing(12)
+        # 영상 블록과 "코스 선택" 블록 사이에는 이 정도 여유를 두고, 블록 내부
+        # (라벨↔목록↔버튼) 간격은 course_section에서 훨씬 좁게 따로 준다 — 예전엔
+        # 이 spacing(12)이 라벨-목록 사이에도 그대로 적용돼서 "스트레칭 선택" 글자와
+        # 목록 사이가 필요 이상으로 넓어 보였다.
+        right.setSpacing(16)
 
         views = QHBoxLayout()
         views.setSpacing(16)
@@ -158,6 +166,9 @@ class StretchingTab(QWidget):
         views.addLayout(ref_col)
 
         my_col = QVBoxLayout()
+        # 결과(코스 이름/평균 점수)는 세션 종료 후 우측 화면 자체(검정 결과 화면)에
+        # 이미 크게 찍히므로, 제목 줄에 "완료 — OO 평균 N점" 같은 걸 또 띄우지 않고
+        # 라벨은 항상 "실시간 카메라"로 고정한다.
         self.my_title = QLabel("실시간 카메라")
         self.my_title.setFont(QFont('', -1, QFont.Weight.Bold))
         my_col.addWidget(self.my_title)
@@ -170,9 +181,15 @@ class StretchingTab(QWidget):
 
         right.addLayout(views)
 
+        # 라벨↔목록↔버튼을 촘촘하게 묶는 별도 레이아웃 — 위 right.setSpacing(16)과
+        # 분리해서 이 블록만 spacing(6)으로 좁혀야 "스트레칭 선택" 글자와 바로
+        # 아래 목록 사이 간격이 붙어 보인다.
+        course_section = QVBoxLayout()
+        course_section.setSpacing(6)
+
         course_title = QLabel("스트레칭 선택")
         course_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        right.addWidget(course_title)
+        course_section.addWidget(course_title)
         self.course_list = QListWidget()
         self.course_list.setMaximumHeight(150)
         if not self.courses:
@@ -183,11 +200,13 @@ class StretchingTab(QWidget):
             item = QListWidgetItem(course['label'])
             item.setData(Qt.ItemDataRole.UserRole, course['course_id'])
             self.course_list.addItem(item)
-        right.addWidget(self.course_list)
+        course_section.addWidget(self.course_list)
 
         self.start_btn = QPushButton("시작")
         self.start_btn.clicked.connect(self.start_video)
-        right.addWidget(self.start_btn)
+        course_section.addWidget(self.start_btn)
+
+        right.addLayout(course_section)
 
         root.addLayout(right, stretch=1)
 
@@ -209,23 +228,29 @@ class StretchingTab(QWidget):
         self._filter_patients(self.search_input.text())
 
     def on_session_end(self, msg):
-        """main_server가 스트레칭 세션을 끝내면 호출 (기준 영상 끝까지 → 평균 점수 DB 저장).
-        요청사항: 세션이 끝나는 즉시 우측 '실시간 카메라' 화면을 멈추고 검정 화면으로
-        바꾼 뒤 평균 점수를 띄운다 — 그 다음부터는 on_result()가 새 프레임으로 다시
-        덮어쓰지 않도록 session_ended 플래그를 세운다."""
+        """main_server가 스트레칭 세션을 끝냈다고(DB 저장 포함) 알려줄 때 호출.
+
+        검정 결과 화면으로 바꾸는 '트리거'는 이제 이 메서드가 아니라 좌측 기준
+        영상이 끝나는 순간(_next_ref_frame)이다 — 서버가 이 메시지를 보내기까지
+        약간의 왕복 지연이 있으면 "좌측 영상 끝남"과 "우측 화면이 검정으로 바뀜"
+        사이에 눈에 보이는 시차(요청하신 싱크 안 맞는 문제)가 생기기 때문. 그래서
+        이 메서드는 이미 멈춰있는 화면의 점수를, 서버가 계산한 더 정확한 평균으로
+        다시 한 번 갱신만 해준다(로컬 프레임 평균은 근사값이라 서버 값이 오면
+        그걸로 교체). 아직 영상이 안 끝났는데 서버가 먼저 종료를 알리는 경우에도
+        대비해 _finish_session을 그대로 호출한다."""
         if msg.get('camera_id') != self.active_camera_id:
             return
-        self.session_ended = True
+        self._finish_session(msg.get('avg_score'))
 
-        avg = msg.get('avg_score')
-        course_name = msg.get('course_name')
-        if msg.get('completed') and avg is not None:
-            saved = "저장됨" if msg.get('saved') else "저장 실패"
-            self.my_title.setText(f"완료 — {course_name} 평균 {avg:.0f}점 ({saved})")
-            result_view = draw_session_result(VIEW_W, VIEW_H, avg, course_name)
-        else:
-            self.my_title.setText(f"종료 — {course_name}" if course_name else "종료")
-            result_view = draw_session_result(VIEW_W, VIEW_H, None, course_name)
+    def _finish_session(self, avg_score=None):
+        """우측 '실시간 카메라' 화면을 멈추고 검정 결과 화면으로 바꾼다.
+        avg_score가 없으면(서버 응답 전이거나 없는 경우) 이번 세션 동안 로컬에서
+        받은 프레임별 점수(self.score_history)의 평균으로 대신한다 — 그래야 서버
+        응답을 기다리지 않고 좌측 영상이 끝나는 즉시 화면을 바꿀 수 있다."""
+        self.session_ended = True
+        if avg_score is None and self.score_history:
+            avg_score = sum(self.score_history) / len(self.score_history)
+        result_view = draw_session_result(VIEW_W, VIEW_H, avg_score, self.active_course_label)
         self.my_view.setPixmap(to_pixmap(result_view))
 
     def _course_by_id(self, course_id):
@@ -247,8 +272,9 @@ class StretchingTab(QWidget):
         camera_id = self.camera_combo.currentText()
         self.active_camera_id = camera_id
         self.session_ended = False   # 새로 시작 → 이전 세션의 검정 결과 화면 고정 해제
+        self.score_history = []
+        self.active_course_label = course['label']
         self.ref_title.setText(f"기준 동작 — {course['label']}")
-        self.my_title.setText(f"실시간 카메라 — {camera_id} · {patient.name}님")
 
         video_path = os.path.abspath(os.path.join(self.stretch_dir, course['video_filename']))
         skeleton_path = os.path.abspath(os.path.join(self.stretch_dir, course['skeleton_filename']))
@@ -280,8 +306,13 @@ class StretchingTab(QWidget):
         ok, frame = self.ref_cap.read()
         if not ok:
             # 기준 동작 영상은 반복 재생하지 않는다 — 끝나면 타이머만 멈추고
-            # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다.
+            # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다. 그리고 바로 이
+            # 순간이 "끝났다"는 기준이므로, 서버의 세션 종료 메시지를 기다리지 않고
+            # 우측 화면도 지금 바로 멈춰서 검정 결과 화면으로 바꾼다 — 좌/우가
+            # 항상 같은 타이밍에 끝나도록.
             self.ref_timer.stop()
+            if not self.session_ended:
+                self._finish_session()
             return
         self.ref_view.setPixmap(to_pixmap(fit_to_view(frame, VIEW_W, VIEW_H)))
 
@@ -323,6 +354,7 @@ class StretchingTab(QWidget):
         overall = info.get('overall', {})
         level = overall.get('level')          # 'good'/'adjust'/'check' — overall 종합 판정
         score = overall.get('score', 0)
+        self.score_history.append(score)   # 세션 종료 시 로컬 평균 계산용 (_finish_session)
 
         # limbs(부위별)/joint_accuracy(관절별)도 각각 같은 3단계 값을 주므로, 스켈레톤을
         # 한 가지 색이 아니라 부위마다 다른 색으로 그린다(안 맞는 부위만 빨갛게 보이게).
