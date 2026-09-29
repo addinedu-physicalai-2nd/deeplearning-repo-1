@@ -4,6 +4,10 @@ import numpy as np
 GOOD_SCORE = 70
 ADJUST_SCORE = 50
 
+# 벌림 거리 비교: 픽셀 거리 대신 "몸통 길이 대비 비율"로 비교 (해상도/카메라 거리와 무관)
+SPREAD_TOLERANCE = 0.7   # 비율 차이가 몸통 길이의 0.7배면 0점
+MIN_BODY_SCALE = 10.0    # 몸통 길이가 이보다 작으면(px) 비교 불가로 보고 건너뜀
+
 class StretchingAnalyzer:
     """Main - 기준 자세와 비교 후 GUI 데이터 생성"""
     
@@ -36,6 +40,9 @@ class StretchingAnalyzer:
             return {'frame_idx': frame_idx, 'tracking_data': {}}
         
         ref_kp = np.array(ref_skeleton['keypoints'], dtype=np.float32)
+        ref_scale = self._body_scale(ref_kp)
+        if ref_scale is None:
+            return {'frame_idx': frame_idx, 'tracking_data': {}}
         
         tracking_data = {}
         
@@ -49,6 +56,11 @@ class StretchingAnalyzer:
             keypoints_drawn = raw_data['keypoints']
             confidence = raw_data['confidence']
             
+            # 몸통 길이 (원본 픽셀 좌표 우선, 없으면 정규화 좌표 사용)
+            user_scale = self._body_scale(raw_data.get('keypoints_px', keypoints_drawn))
+            if user_scale is None:
+                continue
+            
             # ============ 기준 자세의 각도/거리 ============
             ref_limb_angles = {
                 'left_arm': self._compute_angle(ref_kp, (5, 9)),
@@ -56,9 +68,9 @@ class StretchingAnalyzer:
                 'left_leg': self._compute_angle(ref_kp, (11, 15)),
                 'right_leg': self._compute_angle(ref_kp, (12, 16))
             }
-            ref_spread_distances = {
-                'arm_spread': float(np.linalg.norm(ref_kp[9] - ref_kp[10])),
-                'leg_spread': float(np.linalg.norm(ref_kp[15] - ref_kp[16]))
+            ref_spread_ratios = {
+                'arm_spread': float(np.linalg.norm(ref_kp[9] - ref_kp[10])) / ref_scale,
+                'leg_spread': float(np.linalg.norm(ref_kp[15] - ref_kp[16])) / ref_scale
             }
             
             # ============ 각도 비교 ============
@@ -81,11 +93,12 @@ class StretchingAnalyzer:
             spreads_data = {}
             spread_scores = []
             for spread_name in ['arm_spread', 'leg_spread']:
-                dist_diff = abs(user_spread_distances[spread_name] - ref_spread_distances[spread_name])
-                score = max(0, 100 - (dist_diff / 100) * 100)
+                user_ratio = user_spread_distances[spread_name] / user_scale
+                ratio_diff = abs(user_ratio - ref_spread_ratios[spread_name])
+                score = max(0, 100 - (ratio_diff / SPREAD_TOLERANCE) * 100)
                 
                 spreads_data[spread_name] = {
-                    'distance': float(user_spread_distances[spread_name]),
+                    'ratio': float(user_ratio),
                     'score': float(score),
                     'level': self._get_level(score)
                 }
@@ -128,6 +141,17 @@ class StretchingAnalyzer:
             'frame_idx': frame_idx,
             'tracking_data': tracking_data
         }
+    
+    def _body_scale(self, keypoints):
+        """몸통 길이 (어깨 중심 ↔ 엉덩이 중심). 어깨/엉덩이를 못 찾았거나 너무 작으면 None"""
+        kp = np.asarray(keypoints, dtype=np.float32)[:, :2]
+        points = kp[[5, 6, 11, 12]]
+        if np.any(np.all(points == 0, axis=1)):    # YOLO가 못 찾은 점은 (0, 0)
+            return None
+        shoulder_center = (kp[5] + kp[6]) / 2
+        hip_center = (kp[11] + kp[12]) / 2
+        scale = float(np.linalg.norm(shoulder_center - hip_center))
+        return scale if scale >= MIN_BODY_SCALE else None
     
     def _compute_angle(self, keypoints, limb):
         vec = keypoints[limb[1]] - keypoints[limb[0]]
