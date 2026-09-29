@@ -3,7 +3,7 @@ import socket
 import json
 import base64                   
 import requests
-from queue import Queue
+from queue import Queue, Empty, Full
 import threading
 import logging
 
@@ -28,7 +28,8 @@ class AINetworkManager:
         self.main_host = main_host
         self.main_port = main_port
         # ★ 2번: 카메라별 큐
-        self.frame_queues = {cam_id: Queue() for cam_id in CAMERA_PORTS}
+        # 카메라별 최신 프레임 1장만 유지 (AI가 밀려도 지연이 쌓이지 않게)
+        self.frame_queues = {cam_id: Queue(maxsize=1) for cam_id in CAMERA_PORTS}
         self.is_running = False
         
         self.logger = logging.getLogger('AINetworkManager')
@@ -72,12 +73,23 @@ class AINetworkManager:
                     self.logger.error(f"[{addr}] JPEG decode failed")
                     continue
                 
-                q.put({                                      
+                item = {
                     'camera_id': camera_id,
                     'mode': mode,
                     'frame_idx': payload.get('frame_idx'),   # Main이 매긴 번호 (없으면 None)
                     'frame': frame
-                })
+                }
+                try:
+                    q.put_nowait(item)
+                except Full:
+                    try:
+                        q.get_nowait()          # 아직 처리 못 한 이전 프레임은 버림
+                    except Empty:
+                        pass                    # 그 사이 처리 스레드가 꺼내갔으면 그냥 넣기
+                    try:
+                        q.put_nowait(item)
+                    except Full:
+                        pass
                 self.logger.debug(f"Received frame from {camera_id} (mode={mode})")
                 
             except json.JSONDecodeError:
