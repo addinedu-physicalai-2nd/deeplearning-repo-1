@@ -75,6 +75,7 @@ class AINetworkManager:
                 q.put({                                      
                     'camera_id': camera_id,
                     'mode': mode,
+                    'frame_idx': payload.get('frame_idx'),   # Main이 매긴 번호 (없으면 None)
                     'frame': frame
                 })
                 self.logger.debug(f"Received frame from {camera_id} (mode={mode})")

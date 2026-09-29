@@ -72,15 +72,16 @@ class AIManager:
         if mode in [self.MODE_FALL_ONLY, self.MODE_FALL_GAIT, self.MODE_FALL_STRETCH]:
             self.current_mode = mode
     
-    def process_frame(self, frame: np.ndarray) -> str:
+    def process_frame(self, frame: np.ndarray, frame_idx=None) -> str:
         """frame 처리 → JSON 반환"""
         yolo_result = self.yolo_pose.detect(frame)  
         keypoints_dict = yolo_result['keypoints']
         bbox_dict = yolo_result['bbox']
 
-        # 사람이 없는 프레임도 번호는 증가
-        frame_idx = self.frame_idx
-        self.frame_idx += 1
+        # Main이 매긴 frame_idx가 있으면 그대로 사용, 없으면 자체 카운터 (사람 없는 프레임도 증가)
+        if frame_idx is None:
+            frame_idx = self.frame_idx
+            self.frame_idx += 1
 
         detections = []
 

@@ -54,9 +54,10 @@ class AIService:
                 
                 mode = payload['mode']
                 frame = payload['frame']
+                frame_idx = payload.get('frame_idx')
                 
                 ai_mgr.set_mode(mode)
-                json_result = ai_mgr.process_frame(frame)
+                json_result = ai_mgr.process_frame(frame, frame_idx)
                 self.net.send_to_main(json_result)
                 
             except Exception as e:
