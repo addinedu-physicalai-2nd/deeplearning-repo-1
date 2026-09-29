@@ -91,7 +91,7 @@ class GaitTab(QWidget):
         # 좌측: 환자 검색 + 목록
         left = QVBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("환자 검색 (이름/병실)")
+        self.search_input.setPlaceholderText("환자 검색")
         self.search_input.textChanged.connect(self._filter_patients)
         left.addWidget(self.search_input)
 
@@ -153,7 +153,7 @@ class GaitTab(QWidget):
     def _populate_patient_list(self, patients):
         self.patient_list.clear()
         for p in patients:
-            item = QListWidgetItem(f"{p.name} ({p.age}) · {p.room}")
+            item = QListWidgetItem(p.name)
             item.setData(Qt.ItemDataRole.UserRole, p)
             self.patient_list.addItem(item)
 

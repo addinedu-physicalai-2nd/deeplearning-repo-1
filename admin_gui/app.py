@@ -25,7 +25,8 @@ from .drawing import draw_fall, draw_gait
 from .fall_tab import FallTab
 from .gait_tab import GaitTab
 from .network import FrameStore, MainLink, result_receiver, video_receiver
-from .qt_compat import QApplication, QMainWindow, QTabWidget, QTimer
+from .qt_compat import (Qt, QApplication, QFont, QHBoxLayout, QLabel, QMainWindow,
+                        QTabWidget, QTimer, QVBoxLayout, QWidget)
 from .stretch_tab import StretchingTab
 
 UPDATE_INTERVAL_MS = 30
@@ -33,12 +34,31 @@ UPDATE_INTERVAL_MS = 30
 # 목업(gui_mockup_v5.html)과 맞춘 전역 스타일 — 탭 밑줄 강조, 카드 톤 배경 등.
 # 참고: OS가 그리는 실제 창 타이틀바(맨 위 제목줄)는 여기서 손댈 수 없다 —
 # 목업의 상단 바는 브라우저가 그린 가짜 macOS 창틀이라 실제 앱 창틀과는 다르다.
+#
+# 주의: 예전엔 "QMainWindow, QWidget { background: #f7f8fa; ... }"처럼 QWidget에
+# 배경색을 통째로 줬었는데, QLabel도 QWidget의 하위 클래스라 스타일시트가 상속되면서
+# 라벨/컨테이너마다 의도치 않은 회색 사각형 배경이 찍히는 버그가 있었다(낙상 탭 카드
+# 하단의 빈 회색 박스 등). 배경은 QMainWindow/전용 컨테이너에만 주고, QWidget에는
+# 폰트만 주고, QLabel은 명시적으로 투명 처리해서 막는다.
 STYLE_SHEET = """
-QMainWindow, QWidget {
+QMainWindow, #rootContainer {
     background: #f7f8fa;
+}
+QWidget {
     font-family: "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
     font-size: 13px;
     color: #111827;
+}
+QLabel {
+    background: transparent;
+}
+#brandHeader {
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+}
+#brandIcon {
+    background: #eef1ff;
+    border-radius: 20px;
 }
 QTabWidget::pane {
     border: none;
@@ -112,7 +132,36 @@ class AdminWindow(QMainWindow):
         tabs.addTab(self.fall_tab, "낙상")
         tabs.addTab(self.gait_tab, "보행")
         tabs.addTab(self.stretch_tab, "스트레칭")
-        self.setCentralWidget(tabs)
+
+        # 탭 위에 "돌봄" 브랜드 헤더 — 이 창이 돌봄 GUI라는 걸 한눈에 알 수 있게.
+        header = QWidget()
+        header.setObjectName("brandHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 12, 20, 12)
+        header_layout.setSpacing(10)
+
+        icon_label = QLabel("\U0001F9D3")   # 🧓 — 귀여운 노인 아이콘, 로고처럼 사용
+        icon_label.setFixedSize(40, 40)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_label.setObjectName("brandIcon")
+        icon_label.setStyleSheet("font-size:20px;")
+
+        title_label = QLabel("돌봄")
+        title_label.setFont(QFont('', 20, QFont.Weight.Bold))
+        title_label.setStyleSheet("color:#111827;")
+
+        header_layout.addWidget(icon_label)
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+
+        central = QWidget()
+        central.setObjectName("rootContainer")
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(header)
+        central_layout.addWidget(tabs)
+        self.setCentralWidget(central)
 
         self.video_thread = threading.Thread(
             target=video_receiver, args=(self.store, self.stop_event), daemon=True)

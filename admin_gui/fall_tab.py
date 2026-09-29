@@ -15,7 +15,9 @@ resolve_fall 명령은 main_server 쪽에 아직 없음 (작업 지시서 기준
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
 새어 들어가서 뱃지가 세로로 길게 늘어나는 버그가 생긴다 — header 컨테이너와
-badge에 setFixedHeight를 줘서 막는다.
+badge에 setFixedHeight를 줘서 막는다. status_label도 마찬가지로 고정 높이를
+주고, 카드 맨 아래에 addStretch()를 둬서 남는 공간을 거기서 흡수하게 한다
+(안 그러면 status_label이 늘어나서 영상 밑에 텅 빈 회색 박스처럼 보인다).
 """
 from . import db_stub
 from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
@@ -76,7 +78,11 @@ class FallCameraBox(QWidget):
 
         self.status_label = QLabel('-')
         self.status_label.setStyleSheet("color:#9ca3af; font-size:12px; border:none;")
+        self.status_label.setFixedHeight(18)
         layout.addWidget(self.status_label)
+        # 카드가 그리드 행 높이에 맞춰 세로로 늘어나도 남는 공간이 status_label로
+        # 새어 들어가 "빈 회색 박스"처럼 보이지 않도록, 여기서 여유 공간을 흡수한다.
+        layout.addStretch()
 
         self._apply_badge_style('normal')
         self._apply_border()

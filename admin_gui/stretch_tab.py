@@ -9,7 +9,7 @@
 나중에 영상이 추가/삭제돼도 코드를 안 건드려도 된다.
 
 화면 구성(보행 탭과 통일):
-  - 좌측: 환자(=카메라) 선택 목록 (보행 탭과 동일하게 좌측 사이드바)
+  - 좌측: 환자(=카메라) 검색 + 선택 목록 (보행 탭과 동일하게 좌측 사이드바)
   - 우측: 기준 동작 영상 + 실시간 카메라 영상을 크게 나란히 보여주고,
     그 아래에 스트레칭 코스 선택 목록 + 시작 버튼을 둔다.
 
@@ -33,7 +33,7 @@ from . import patients as patients_module
 from .drawing import (LEVEL_COLOR, UNKNOWN_COLOR, draw_skeleton,
                        draw_stretch_badge, fit_to_view, to_pixmap)
 from .qt_compat import (
-    Qt, QFont, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    Qt, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
 )
 
@@ -86,15 +86,20 @@ class StretchingTab(QWidget):
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(16)
 
-        # 좌측: 환자(카메라) 선택 — 보행 탭과 동일한 사이드바 구성
+        # 좌측: 환자(카메라) 검색 + 선택 — 보행 탭과 동일한 사이드바 구성
         left = QVBoxLayout()
-        left.addWidget(QLabel("환자 선택"))
+        left.setSpacing(8)
+        left_title = QLabel("환자 선택")
+        left_title.setFont(QFont('', -1, QFont.Weight.Bold))
+        left.addWidget(left_title)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("환자 검색")
+        self.search_input.textChanged.connect(self._filter_patients)
+        left.addWidget(self.search_input)
+
         self.patient_list = QListWidget()
-        for p in self.patients:
-            item = QListWidgetItem(f"{p.name} · {p.room} ({p.camera_id})")
-            item.setData(Qt.ItemDataRole.UserRole, p)
-            self.patient_list.addItem(item)
         left.addWidget(self.patient_list)
+        self._populate_patient_list(self.patients)
 
         left_widget = QWidget()
         left_widget.setLayout(left)
@@ -132,7 +137,9 @@ class StretchingTab(QWidget):
 
         right.addLayout(views)
 
-        right.addWidget(QLabel("스트레칭 선택"))
+        course_title = QLabel("스트레칭 선택")
+        course_title.setFont(QFont('', -1, QFont.Weight.Bold))
+        right.addWidget(course_title)
         self.course_list = QListWidget()
         self.course_list.setMaximumHeight(150)
         if not self.courses:
@@ -150,6 +157,18 @@ class StretchingTab(QWidget):
         right.addWidget(self.start_btn)
 
         root.addLayout(right, stretch=1)
+
+    def _populate_patient_list(self, patients):
+        self.patient_list.clear()
+        for p in patients:
+            item = QListWidgetItem(p.name)
+            item.setData(Qt.ItemDataRole.UserRole, p)
+            self.patient_list.addItem(item)
+
+    def _filter_patients(self, text):
+        text = text.strip()
+        filtered = [p for p in self.patients if text in p.name] if text else self.patients
+        self._populate_patient_list(filtered)
 
     def _course_by_id(self, course_id):
         for course in self.courses:
