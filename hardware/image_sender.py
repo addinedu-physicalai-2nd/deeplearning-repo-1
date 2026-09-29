@@ -41,6 +41,18 @@ def main():
     if not capture.isOpened():
         raise SystemExit(f"카메라/영상을 열 수 없음: {source}")
 
+    if not is_file:
+        # 웹캠은 MJPG로 받기 (YUYV 무압축은 USB 대역폭 한계로 프레임이 섞여서 깨짐)
+        # FOURCC를 먼저 설정해야 해상도/FPS가 MJPG 기준으로 잡힘
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        capture.set(cv2.CAP_PROP_FPS, args.fps)
+
+        fourcc = int(capture.get(cv2.CAP_PROP_FOURCC)).to_bytes(4, 'little').decode(errors='replace')
+        print(f"camera format: {fourcc} {int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+              f"{int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))} @ {capture.get(cv2.CAP_PROP_FPS):.0f}fps")
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     target = (args.host, CAMERA_PORTS[args.camera])
     interval = 1.0 / args.fps
