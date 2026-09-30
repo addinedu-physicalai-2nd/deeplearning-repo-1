@@ -17,6 +17,7 @@ import argparse
 import json
 import queue
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -31,6 +32,7 @@ from .qt_compat import (Qt, QApplication, QFont, QHBoxLayout, QLabel, QMainWindo
 from .stretch_tab import StretchingTab
 
 UPDATE_INTERVAL_MS = 30
+FPS_LOG_SEC = 5.0   # 스트레칭 수신/표시 프레임 수 로그 주기
 
 # 목업(gui_mockup_v5.html)과 맞춘 전역 스타일 — 탭 밑줄 강조, 카드 톤 배경 등.
 # 참고: OS가 그리는 실제 창 타이틀바(맨 위 제목줄)는 여기서 손댈 수 없다 —
@@ -130,6 +132,11 @@ class AdminWindow(QMainWindow):
         # 서버 출력으로 확인 못 한 추측값이라, mode별로 딱 한 번씩만 원본 메시지를
         # 콘솔에 그대로 찍어서 눈으로 확인할 수 있게 해둔다. 확인 끝나면 지워도 됨.
         self._debug_seen_modes = set()
+        # 스트레칭 FPS 계측용 (update_views에서 FPS_LOG_SEC마다 출력 후 초기화)
+        self._fps_recv = 0          # 받은 mode=2 결과 수
+        self._fps_drawn = 0         # 프레임 매칭 성공해서 on_result까지 간 수
+        self._fps_ticks = 0         # mode=2가 1개 이상 들어온 tick 수 (= 체감 FPS 상한)
+        self._fps_last = time.monotonic()
 
         tabs = QTabWidget()
         tabs.addTab(self.fall_tab, "낙상")
@@ -218,6 +225,19 @@ class AdminWindow(QMainWindow):
             if msg.get('mode') == 2:
                 latest_stretch_idx[msg.get('camera_id')] = i
 
+        # 스트레칭 FPS 계측 — sender / main_server 로그와 비교해서 병목 위치 확인용
+        stretch_count = sum(1 for m in pending if m.get('mode') == 2)
+        self._fps_recv += stretch_count
+        if stretch_count:
+            self._fps_ticks += 1
+        now = time.monotonic()
+        if now - self._fps_last >= FPS_LOG_SEC:
+            sec = now - self._fps_last
+            print(f"[GUI] stretch recv {self._fps_recv / sec:.1f}/s, "
+                  f"drawn {self._fps_drawn / sec:.1f}/s, update ticks {self._fps_ticks / sec:.1f}/s")
+            self._fps_recv = self._fps_drawn = self._fps_ticks = 0
+            self._fps_last = now
+
         for i, msg in enumerate(pending):
             if msg.get('mode') == 2 and latest_stretch_idx.get(msg.get('camera_id')) != i:
                 # 이 카메라의 더 최신 mode=2 프레임이 같은 배치 안에 있음 →
@@ -272,6 +292,7 @@ class AdminWindow(QMainWindow):
             self.gait_tab.show_frame(camera_id, frame)
             self.gait_tab.render(camera_id, msg)
         elif mode == 2:
+            self._fps_drawn += 1
             self.stretch_tab.on_result(camera_id, msg, frame)
 
     def closeEvent(self, event):

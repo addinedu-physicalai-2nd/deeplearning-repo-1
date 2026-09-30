@@ -18,7 +18,7 @@ MODE_FALL = 0
 MODE_GAIT = 1
 MODE_STRETCH = 2
 
-UPDATE_INTERVAL_SEC = 0.05   # 결과 처리 주기 (20Hz)
+UPDATE_INTERVAL_SEC = 0.01   # 결과 처리 주기 (100Hz) — 50ms 배치 대기로 생기는 지연/몰림 감소
 STATUS_LOG_SEC = 5.0         # 수신 현황 로그 주기
 
 

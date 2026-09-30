@@ -26,6 +26,9 @@
   3) main_server에 start_stretching 명령(기준 자세 JSON 절대경로 포함)을 보낸다.
   4) 우측 영상에는 그 환자의 실시간 카메라 영상(거울처럼 좌우 반전) + 부위별 색이
      입혀진 스켈레톤 + 판정 뱃지를 보여준다.
+  5) 결과의 frame_idx가 기준 스켈레톤 마지막 인덱스에 도달하면 우측 화면을 검정
+     결과 화면(코스 이름 + 평균 점수)으로 바꾼다 — main_server의 세션 종료 조건과
+     같은 기준이라 화면에 나온 프레임 / 로컬 평균 / DB 평균이 모두 같은 범위가 된다.
 """
 import os
 import re
@@ -33,8 +36,8 @@ import time
 
 import cv2
 
-from .drawing import (LEVEL_COLOR, UNKNOWN_COLOR, draw_session_result,
-                       draw_skeleton, draw_stretch_badge, fit_to_view, to_pixmap)
+from .drawing import (LEVEL_COLOR, UNKNOWN_COLOR, draw_session_result, draw_skeleton,
+                       draw_stretch_badge, fit_to_view, load_reference, to_pixmap)
 from config.settings import CAMERA_PORTS
 from .qt_compat import (
     Qt, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -46,14 +49,13 @@ SKELETON_SUFFIX = '_skeleton.json'
 # 보행 탭(480x360)보다 크게 — 좌우 영상이 화면의 실질적인 주인공이므로.
 VIEW_W, VIEW_H = 560, 420
 
-# 좌측 기준 영상이 끝난 뒤 우측 화면을 검정으로 잠그기까지 주는 여유 시간(ms).
-# 좌측 영상 재생 타이머와 실제 카메라→서버→GUI 파이프라인은 서로 다른 시계라서,
-# 좌측이 끝났다고 곧바로 우측을 잠그면 그 순간 네트워크상에 아직 날아오던(또는
-# result_queue에 대기 중이던) 마지막 프레임 몇 개가 통째로 버려진다("프레임 드랍").
-# 그렇다고 서버의 세션 종료 메시지를 기다리면 왕복 지연 때문에 싱크가 눈에 보이게
-# 어긋난다. 그래서 그 사이 절충으로, 짧게(사람 눈엔 거의 동시로 보이는 정도) 여유를
-# 주고 그 안에 들어오는 프레임은 정상적으로 처리한 뒤에만 잠근다.
-FINISH_GRACE_MS = 300
+# 우측 화면 종료 기준은 결과의 frame_idx가 기준 스켈레톤 마지막 인덱스에 도달했을
+# 때다(main_server의 _track_stretch_score와 같은 조건). 좌측 영상 재생 타이머와
+# 카메라→서버→GUI 파이프라인은 서로 다른 시계라서, 좌측이 끝나는 시점을 기준으로
+# 우측을 잠그면 파이프라인 지연만큼(약 1~2초) 아직 도착 안 한 "세션 안의 정상 프레임"이
+# 잘려나간다. 그래서 좌측 영상 종료는 트리거로 쓰지 않고, 카메라/서버가 죽어서 결과가
+# 끊겼을 때만 쓰는 안전장치 타임아웃으로만 쓴다. 파이프라인 지연보다 넉넉하게 준다.
+FINISH_GRACE_MS = 3000
 
 # on_session_end 메시지가 "이번(현재) 세션" 것인지 "이전 세션의 뒤늦은 메시지"인지
 # 구분할 방법이 메시지 자체엔 없다(세션 구분용 id가 없음). 그런데 좌측 영상이 끝나서
@@ -123,6 +125,9 @@ class StretchingTab(QWidget):
         # 기다리지 않고 이걸로 즉시 평균을 내서 우측 화면에 보여준다(동기화 목적).
         self.score_history = []
         self.active_course_label = None
+        # 기준 스켈레톤의 마지막 frame_index (0부터 재정렬된 값). main_server의
+        # session['last_idx']와 같은 값 — 이 인덱스의 결과가 오면 우측 화면을 멈춘다.
+        self.last_ref_idx = None
         # "몇 번째 세션인지" 세는 값. start_video()를 누를 때마다 하나씩 증가한다.
         # 그레이스 타이머(finish_timer)나 뒤늦게 도착한 on_session_end가 "지금 이미
         # 새로 시작된 세션"을 잘못 얼려버리는 걸 막는 용도(아래 pending_finish_gen /
@@ -322,6 +327,16 @@ class StretchingTab(QWidget):
         if not self.session_ended:
             self._finish_session()
 
+    def _reached_last_ref_frame(self, frame_idx):
+        """이 결과가 기준 영상의 마지막 프레임에 해당하는지.
+        새 세션 시작 직후(STALE_END_GUARD_SEC 이내)에 오는 큰 frame_idx는 이전 세션이
+        큐에 남겨둔 결과일 수 있으므로 종료로 치지 않는다."""
+        if frame_idx is None or self.last_ref_idx is None:
+            return False
+        if time.monotonic() - self.session_start_time < STALE_END_GUARD_SEC:
+            return False
+        return frame_idx >= self.last_ref_idx
+
     def _course_by_id(self, course_id):
         for course in self.courses:
             if course['course_id'] == course_id:
@@ -351,6 +366,12 @@ class StretchingTab(QWidget):
 
         video_path = os.path.abspath(os.path.join(self.stretch_dir, course['video_filename']))
         skeleton_path = os.path.abspath(os.path.join(self.stretch_dir, course['skeleton_filename']))
+        try:
+            reference = load_reference(skeleton_path)
+            self.last_ref_idx = max(reference) if reference else None
+        except (OSError, ValueError, KeyError) as e:
+            print(f"[StretchTab] 기준 스켈레톤 로드 실패: {skeleton_path} ({e})")
+            self.last_ref_idx = None
         self._start_reference_player(video_path)
 
         self.link.send({
@@ -379,12 +400,9 @@ class StretchingTab(QWidget):
         ok, frame = self.ref_cap.read()
         if not ok:
             # 기준 동작 영상은 반복 재생하지 않는다 — 끝나면 타이머만 멈추고
-            # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다. 그리고 바로 이
-            # 순간을 "끝났다"는 기준으로 삼아 곧(FINISH_GRACE_MS 뒤) 우측 화면도
-            # 검정 결과 화면으로 바꾼다 — 좌/우가 거의 같은 타이밍에 끝나도록.
-            # 곧바로 잠그지 않고 짧게 기다리는 이유는 FINISH_GRACE_MS 주석 참고 —
-            # 그 사이 네트워크상에 아직 오고 있던 마지막 프레임 몇 개를 버리지
-            # 않기 위해서다.
+            # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다. 우측 화면 종료는
+            # on_result()에서 마지막 frame_idx가 도착했을 때 하고, 여기서는 결과가
+            # 끊긴 경우를 대비한 안전장치 타이머(FINISH_GRACE_MS)만 걸어둔다.
             self.ref_timer.stop()
             if not self.session_ended:
                 self.pending_finish_gen = self.session_gen
@@ -408,13 +426,17 @@ class StretchingTab(QWidget):
         실시간 카메라는 환자가 거울 보듯 자연스럽게 보도록 좌우 반전해서 보여준다.
         반전은 스켈레톤/뱃지를 그리기 전에 원본 프레임에 먼저 적용한다 — 그래야
         뱃지 점수 텍스트가 거꾸로 뒤집혀 나오지 않고, keypoints도 같은 기준(프레임
-        폭)으로 같이 반전시켜서 스켈레톤이 반전된 영상과 어긋나지 않게 맞춘다."""
+        폭)으로 같이 반전시켜서 스켈레톤이 반전된 영상과 어긋나지 않게 맞춘다.
+
+        결과의 frame_idx가 기준 스켈레톤 마지막 인덱스에 도달하면 그 자리에서
+        세션 종료 화면으로 바꾼다 — 좌측 영상 타이머와 무관하게 서버와 같은 기준."""
         if camera_id != self.active_camera_id:
             return
         if self.session_ended:
             # 세션이 이미 끝나서 검정 결과 화면을 띄워둔 상태 — 뒤늦게 도착하는
             # 프레임으로 다시 덮어쓰지 않는다. (새 시작을 누르면 start_video()에서 해제)
             return
+        frame_idx = msg.get('frame_idx')
         data = msg.get('data', {})
         tracking = data.get('tracking_data', {})
 
@@ -424,28 +446,32 @@ class StretchingTab(QWidget):
             view = fit_to_view(frame, VIEW_W, VIEW_H)
             draw_stretch_badge(view, None, 0)
             self.my_view.setPixmap(to_pixmap(view))
-            return
+        else:
+            # 화면에는 한 명만 표시 (첫 번째 track)
+            track_id, info = next(iter(tracking.items()))
+            overall = info.get('overall', {})
+            level = overall.get('level')          # 'good'/'adjust'/'check' — overall 종합 판정
+            score = overall.get('score', 0)
+            self.score_history.append(score)   # 세션 종료 시 로컬 평균 계산용 (_finish_session)
 
-        # 화면에는 한 명만 표시 (첫 번째 track)
-        track_id, info = next(iter(tracking.items()))
-        overall = info.get('overall', {})
-        level = overall.get('level')          # 'good'/'adjust'/'check' — overall 종합 판정
-        score = overall.get('score', 0)
-        self.score_history.append(score)   # 세션 종료 시 로컬 평균 계산용 (_finish_session)
+            # limbs(부위별)/joint_accuracy(관절별)도 각각 같은 3단계 값을 주므로, 스켈레톤을
+            # 한 가지 색이 아니라 부위마다 다른 색으로 그린다(안 맞는 부위만 빨갛게 보이게).
+            # keypoints_px는 main_server에서 None으로 올 수 있어서 or []로 막는다.
+            frame_w = frame.shape[1]
+            keypoints = _mirror_keypoints(info.get('keypoints_px') or [], frame_w)
+            limb_colors = {name: LEVEL_COLOR.get(v.get('level'), UNKNOWN_COLOR)
+                           for name, v in info.get('limbs', {}).items()}
+            joint_colors = {name: LEVEL_COLOR.get(v.get('level'), UNKNOWN_COLOR)
+                            for name, v in info.get('joint_accuracy', {}).items()}
 
-        # limbs(부위별)/joint_accuracy(관절별)도 각각 같은 3단계 값을 주므로, 스켈레톤을
-        # 한 가지 색이 아니라 부위마다 다른 색으로 그린다(안 맞는 부위만 빨갛게 보이게).
-        frame_w = frame.shape[1]
-        keypoints = _mirror_keypoints(info.get('keypoints_px', []), frame_w)
-        limb_colors = {name: LEVEL_COLOR.get(v.get('level'), UNKNOWN_COLOR)
-                       for name, v in info.get('limbs', {}).items()}
-        joint_colors = {name: LEVEL_COLOR.get(v.get('level'), UNKNOWN_COLOR)
-                        for name, v in info.get('joint_accuracy', {}).items()}
+            # 스켈레톤은 원본 frame(반전 이미 적용됨)에 먼저 그리고 그 다음에 뷰 크기로 맞춘다.
+            draw_skeleton(frame, keypoints, limb_colors, joint_colors,
+                          default=LEVEL_COLOR.get(level, UNKNOWN_COLOR))
+            view = fit_to_view(frame, VIEW_W, VIEW_H)
+            draw_stretch_badge(view, level, score)
+            self.my_view.setPixmap(to_pixmap(view))
 
-        # fit_to_view 이후의 keypoints는 원본 해상도 좌표라 좌표가 안 맞을 수 있으므로,
-        # 스켈레톤은 원본 frame(반전 이미 적용됨)에 먼저 그리고 그 다음에 뷰 크기로 맞춘다.
-        draw_skeleton(frame, keypoints, limb_colors, joint_colors,
-                      default=LEVEL_COLOR.get(level, UNKNOWN_COLOR))
-        view = fit_to_view(frame, VIEW_W, VIEW_H)
-        draw_stretch_badge(view, level, score)
-        self.my_view.setPixmap(to_pixmap(view))
+        if self._reached_last_ref_frame(frame_idx):
+            # 기준 영상 마지막 프레임까지 도착 → 서버와 같은 시점에 종료 화면으로 전환
+            self.finish_timer.stop()
+            self._finish_session()
