@@ -27,11 +27,19 @@ main_server 환자 목록(get_patients)의 camera_id로 채워서 보여주고, 
 매번 알림이 쌓여 피로해지는 문제를 막기 위함(사용자 확인 완료, 로직 변경
 승인됨).
 
-자동 탭 전환: 낙상 AI는 사용자가 보행/스트레칭 탭에서 작업 중이어도 항상
-백그라운드에서 돌고 있으므로, 새 낙상(빨강) 알림이 뜨는 순간 fall_detected
-시그널을 쏴서 app.py가 화면을 즉시 낙상 탭으로 전환하게 한다 — 다른 탭을
-보고 있다가 낙상 발생을 놓치는 일이 없도록(사용자 확인 완료, 로직 변경
-승인됨). 주의(주황) 알림은 탭을 전환하지 않는다.
+낙상 알림 방식: 낙상 AI는 사용자가 보행/스트레칭 탭에서 작업 중이어도 항상
+백그라운드에서 돌고 있다. 처음엔 새 낙상(빨강) 알림이 뜨는 즉시 화면을
+강제로 낙상 탭으로 전환했었는데(자동 탭 전환), 다른 탭에서 작업 중일 때
+화면이 갑자기 바뀌는 게 오히려 불편하다는 피드백을 받아 다음 두 가지로
+바꿨다(사용자 확인 완료, 로직 변경 승인됨):
+  1) fall_detected(room_label, message) 시그널만 쏜다 — app.py가 이걸 받아
+     화면 우상단에 사선으로 겹쳐 쌓이는 토스트 알림을 띄운다. 토스트를
+     "클릭"해야만 낙상 탭으로 이동한다(강제 전환 없음).
+  2) alert_count_changed(count) 시그널로 "처리되지 않은 낙상 알림 개수"를
+     알린다 — app.py가 이 값으로 낙상 탭 위에 빨간 점 뱃지를 켜고 끈다.
+낙상 탭으로 이동한 뒤에는 우측 "메시지 알림" 패널에서 카드를 클릭해 기존
+방식대로 처리 완료 팝업을 연다. 주의(주황) 알림은 토스트/뱃지 대상이
+아니다(fall_detected/alert_count_changed 모두 urgent 알림에만 반응).
 
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
@@ -181,6 +189,64 @@ class AlertCard(QFrame):
         self.deleteLater()
 
 
+class FallToast(QFrame):
+    """화면 우상단에 사선(대각선)으로 겹쳐 쌓이는 낙상 알림 토스트.
+
+    예전엔 낙상 감지 즉시 낙상 탭으로 화면을 강제 전환했지만, 보행/스트레칭
+    탭에서 작업하던 중 화면이 갑자기 바뀌는 게 오히려 불편하다는 피드백에
+    따라 도입했다 — 이 토스트는 "클릭"해야만 낙상 탭으로 이동한다(자동 전환
+    없음). 배치/겹침 로직은 여러 탭 위에 떠 있어야 하므로 app.py(AdminWindow)가
+    담당하고, 이 클래스는 카드 하나의 생김새와 클릭/닫기 신호만 책임진다."""
+    clicked = pyqtSignal()
+    closed = pyqtSignal()
+
+    def __init__(self, room_label, message, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(280)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "FallToast { background:#ffffff; border:1px solid #fecaca; "
+            "border-left:4px solid #ef4444; border-radius:10px; }"
+        )
+        apply_card_shadow(self)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 28, 10)
+        layout.setSpacing(4)
+        title = QLabel(f"낙상 감지 · {room_label}")
+        title.setStyleSheet("font-weight:700; font-size:13px; color:#111827; border:none;")
+        body = QLabel(message)
+        body.setWordWrap(True)
+        body.setStyleSheet("color:#6b7280; font-size:12px; border:none;")
+        layout.addWidget(title)
+        layout.addWidget(body)
+
+        # 닫기(×) 버튼 — QPushButton은 자체적으로 마우스 이벤트를 소비하므로
+        # 이 버튼을 눌렀을 때 아래 mousePressEvent(카드 클릭=탭 이동)가 같이
+        # 발동되지 않는다(AlertCard의 라벨 클릭 통과 패턴과 동일한 원리).
+        self.close_btn = QPushButton("×", self)
+        self.close_btn.setFixedSize(20, 20)
+        self.close_btn.setStyleSheet(
+            "QPushButton { background:transparent; color:#9ca3af; border:none; "
+            "font-size:15px; font-weight:700; padding:0; }"
+            "QPushButton:hover { color:#374151; background:transparent; }"
+        )
+        self.close_btn.clicked.connect(self.closed.emit)
+        self.close_btn.move(self.width() - 26, 6)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.close_btn.move(self.width() - 26, 6)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def remove(self):
+        self.setParent(None)
+        self.deleteLater()
+
+
 class ResolveFallDialog(QDialog):
     """낙상 카드 클릭 시 뜨는 팝업. 카메라(=침상)가 환자와 1:1로 고정 매칭되어
     있으므로 환자명은 이미 알고 있는 값을 그대로 보여주고(읽기 전용),
@@ -216,9 +282,13 @@ class ResolveFallDialog(QDialog):
 
 
 class FallTab(QWidget):
-    # 새 낙상(빨강) 알림이 뜰 때마다 emit — app.py가 받아서 지금 어느 탭을
-    # 보고 있든 낙상 탭으로 화면을 전환한다(주의/주황 알림은 emit하지 않음).
-    fall_detected = pyqtSignal()
+    # 새 낙상(빨강) 알림이 뜰 때마다 emit(room_label, message) — app.py가 받아서
+    # 화면 우상단에 토스트 알림을 띄운다(주의/주황 알림은 emit하지 않음). 예전엔
+    # 이 시그널로 탭을 강제 전환했지만 지금은 안 한다(모듈 docstring 참고).
+    fall_detected = pyqtSignal(str, str)
+    # 처리되지 않은 낙상 알림 개수가 바뀔 때마다 emit — app.py가 낙상 탭 위
+    # 빨간 점 뱃지를 켜고 끄는 데 쓴다.
+    alert_count_changed = pyqtSignal(int)
 
     def __init__(self, link):
         super().__init__()
@@ -334,6 +404,7 @@ class FallTab(QWidget):
                     self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=True,
                                           message="낙상이 감지되었습니다. 확인 후 처리해주세요.")
                     self.active_camera_alerts.add(camera_id)
+                    self.alert_count_changed.emit(len(self.active_camera_alerts))
             elif name.endswith('TO_CHECKING'):
                 self._add_log_entry(room_label, "자세 확인 필요")
                 self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=False,
@@ -356,8 +427,8 @@ class FallTab(QWidget):
                 lambda: self._handle_urgent_click(camera_id, room_label, patient_name, track_id, card))
             self.cards[track_id] = card
             # 낙상 감지 즉시 알려서, 지금 보행/스트레칭 탭을 보고 있어도
-            # app.py가 낙상 탭으로 화면을 전환하게 한다.
-            self.fall_detected.emit()
+            # app.py가 우상단 토스트를 띄우게 한다(탭 강제 전환은 안 함).
+            self.fall_detected.emit(room_label, message)
         else:
             card.clicked.connect(card.remove)
         self.notif_stack.insertWidget(0, card)
@@ -379,3 +450,4 @@ class FallTab(QWidget):
             self.cards.pop(track_id, None)
             # 처리 완료가 끝났으니 이 카메라는 다시 낙상 알림을 받을 수 있다.
             self.active_camera_alerts.discard(camera_id)
+            self.alert_count_changed.emit(len(self.active_camera_alerts))

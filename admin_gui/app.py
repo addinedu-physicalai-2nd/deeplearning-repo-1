@@ -25,15 +25,38 @@ import numpy as np
 
 from . import db_client
 from .drawing import draw_fall, draw_gait
-from .fall_tab import FallTab
+from .fall_tab import FallTab, FallToast
 from .gait_tab import GaitTab
 from .network import FrameStore, MainLink, result_receiver, video_receiver
-from .qt_compat import (Qt, QApplication, QFont, QFontDatabase, QHBoxLayout, QLabel,
-                        QMainWindow, QTabWidget, QTimer, QVBoxLayout, QWidget)
+from .qt_compat import (Qt, QApplication, QColor, QFont, QFontDatabase, QHBoxLayout, QIcon,
+                        QLabel, QMainWindow, QPainter, QPixmap, QTabWidget, QTimer,
+                        QVBoxLayout, QWidget)
 from .stretch_tab import StretchingTab
 
 UPDATE_INTERVAL_MS = 30
 FPS_LOG_SEC = 5.0   # 스트레칭 수신/표시 프레임 수 로그 주기
+
+# 낙상 탭 위에 띄우는 빨간 점 뱃지 지름(px) — 처리되지 않은 낙상 알림이 있을 때만 표시.
+FALL_BADGE_DOT_SIZE = 8
+# 우상단 토스트 알림 — 화면이 너무 어수선해지지 않게 최대 이 개수까지만 겹쳐 보여준다.
+MAX_FALL_TOASTS = 4
+# 토스트 자동 소멸까지 걸리는 시간(ms). 그 전에 클릭하면 낙상 탭으로 이동하고,
+# ×를 누르면 즉시 닫힌다.
+FALL_TOAST_LIFETIME_MS = 6000
+
+
+def _make_fall_badge_icon():
+    """낙상 탭 이름 옆에 얹을 작은 빨간 점 아이콘을 코드로 직접 그려서 만든다
+    (별도 이미지 파일 없이 QPainter로 생성)."""
+    pixmap = QPixmap(FALL_BADGE_DOT_SIZE, FALL_BADGE_DOT_SIZE)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor('#ef4444'))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(0, 0, FALL_BADGE_DOT_SIZE, FALL_BADGE_DOT_SIZE)
+    painter.end()
+    return QIcon(pixmap)
 
 # 번들 폰트(Pretendard) — 시스템에 안 깔려 있어도 항상 같은 폰트로 보이도록
 # admin_gui/assets/fonts/에 직접 넣어두고 앱 시작 시 등록한다. STYLE_SHEET의
@@ -163,11 +186,20 @@ class AdminWindow(QMainWindow):
         self.tabs.addTab(self.gait_tab, "보행")
         self.tabs.addTab(self.stretch_tab, "스트레칭")
 
-        # 낙상 AI는 사용자가 보행/스트레칭 탭에 있어도 항상 백그라운드에서
-        # 돌고 있으므로, 낙상이 새로 감지되면(FallTab.fall_detected) 지금 보고
-        # 있는 탭과 상관없이 즉시 낙상 탭으로 전환한다(사용자 확인 완료, 로직
-        # 변경 승인됨).
-        self.fall_tab.fall_detected.connect(lambda: self.tabs.setCurrentWidget(self.fall_tab))
+        # 낙상 알림: 처음엔 새 낙상이 감지되면 무조건 낙상 탭으로 화면을 강제
+        # 전환했는데, 보행/스트레칭 탭에서 작업 중일 때 화면이 갑자기 바뀌는
+        # 게 오히려 불편하다는 피드백에 따라 — 우상단 토스트(클릭해야 이동) +
+        # 낙상 탭 옆 빨간 점 뱃지 방식으로 바꿨다(fall_tab.py 모듈 docstring
+        # 참고, 사용자 확인 완료·로직 변경 승인됨).
+        self._fall_toasts = []          # 화면에 떠 있는 FallToast 목록(0=최신/맨 앞)
+        self._fall_badge_icon = _make_fall_badge_icon()
+        self.fall_tab.fall_detected.connect(self._show_fall_toast)
+        self.fall_tab.alert_count_changed.connect(self._update_fall_badge)
+
+        # 보행 탭 버그 수정: "보행 분석 시작"을 눌러둔 채로 다른 탭에 갔다가
+        # 돌아오면 분석/카메라 영상이 계속 켜진 채로 남아있던 문제 — 보행 탭이
+        # 더 이상 현재 탭이 아니게 될 때마다 분석을 멈추고 화면을 초기화한다.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # 탭 위에 "돌봄" 브랜드 헤더 — 이 창이 돌봄 GUI라는 걸 한눈에 알 수 있게.
         header = QWidget()
@@ -321,6 +353,68 @@ class AdminWindow(QMainWindow):
         elif mode == 2:
             self._fps_drawn += 1
             self.stretch_tab.on_result(camera_id, msg, frame)
+
+    def _on_tab_changed(self, index):
+        """탭이 바뀔 때마다 호출. 지금 보이는 탭이 보행 탭이 아니면 보행
+        분석을 초기화한다(버그 수정 — 위 __init__ 주석 참고). 이미 초기
+        상태면 GaitTab.reset_analysis()가 아무것도 안 하므로 매번 호출해도
+        안전하다."""
+        if self.tabs.currentWidget() is not self.gait_tab:
+            self.gait_tab.reset_analysis()
+
+    def _show_fall_toast(self, room_label, message):
+        """낙상 감지 시 화면 우상단에 토스트를 띄운다(FallTab.fall_detected).
+        클릭하면 낙상 탭으로 이동, ×를 누르거나 일정 시간이 지나면 사라진다."""
+        toast = FallToast(room_label, message, parent=self.centralWidget())
+        toast.clicked.connect(lambda t=toast: self._on_fall_toast_clicked(t))
+        toast.closed.connect(lambda t=toast: self._dismiss_fall_toast(t))
+        self._fall_toasts.insert(0, toast)
+        while len(self._fall_toasts) > MAX_FALL_TOASTS:
+            oldest = self._fall_toasts.pop()
+            oldest.remove()
+        self._layout_fall_toasts()
+        toast.show()
+        QTimer.singleShot(FALL_TOAST_LIFETIME_MS, lambda t=toast: self._dismiss_fall_toast(t))
+
+    def _layout_fall_toasts(self):
+        """토스트들을 우상단에 사선(대각선)으로 겹쳐 배치한다 — 목업처럼 반듯하게
+        아래로 쌓는 대신, 뒤에 있는(오래된) 토스트일수록 오른쪽/아래로 조금씩
+        더 밀려나서 카드 뭉치가 부채꼴로 퍼진 것처럼 보이게 한다. 가장 최근
+        토스트(index 0)가 맨 앞·맨 위(z-order)에 온다."""
+        central = self.centralWidget()
+        if central is None:
+            return
+        top_margin = 76      # 브랜드 헤더 아래로 여유를 둔 시작 y좌표
+        right_margin = 20
+        step_x, step_y = 10, 14
+        width = central.width()
+        for i in reversed(range(len(self._fall_toasts))):
+            toast = self._fall_toasts[i]
+            toast.adjustSize()
+            x = width - toast.width() - right_margin - i * step_x
+            y = top_margin + i * step_y
+            toast.move(max(0, x), y)
+            toast.raise_()
+
+    def _on_fall_toast_clicked(self, toast):
+        self.tabs.setCurrentWidget(self.fall_tab)
+        self._dismiss_fall_toast(toast)
+
+    def _dismiss_fall_toast(self, toast):
+        if toast not in self._fall_toasts:
+            return   # 이미 자동 소멸 타이머/× 버튼 중 하나로 먼저 지워진 경우
+        self._fall_toasts.remove(toast)
+        toast.remove()
+        self._layout_fall_toasts()
+
+    def _update_fall_badge(self, count):
+        """낙상 탭(인덱스 0) 옆에 처리되지 않은 알림이 있으면 빨간 점을,
+        없으면(count == 0) 아이콘을 지운다."""
+        self.tabs.setTabIcon(0, self._fall_badge_icon if count > 0 else QIcon())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_fall_toasts()
 
     def closeEvent(self, event):
         self.stop_event.set()

@@ -8,7 +8,7 @@
 모아뒀다 — 기존 동작/데이터 흐름은 전혀 건드리지 않는다.
 """
 from .qt_compat import (
-    Qt, QColor, QFrame, QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget,
+    Qt, QColor, QFrame, QGraphicsDropShadowEffect, QLabel, QListWidgetItem, QVBoxLayout, QWidget,
 )
 
 _SECTION_COUNTER = 0
@@ -71,19 +71,30 @@ def style_pill_badge(label, bg_color, text_color='#ffffff'):
     )
 
 
-def style_selectable_list(list_widget):
+def style_selectable_list(list_widget, spacing=6):
     """검색/조회 결과가 카드처럼 하나씩 쌓이는 느낌의 QListWidget 스타일
     (보행/스트레칭 탭의 환자 선택·스트레칭 선택 목록에 사용). 항목 하나하나가
     흰색 카드로 보이고, 선택된 항목은 파란 테두리+옅은 파란 배경으로 강조된다
-    (낙상 탭의 메시지 알림 카드와 같은 시각 언어)."""
-    list_widget.setSpacing(6)
+    (낙상 탭의 메시지 알림 카드와 같은 시각 언어).
+
+    spacing: 항목 사이 세로 간격(px). 스트레칭 탭의 "스트레칭 선택" 목록은
+    다른 목록보다 더 촘촘하게 붙여달라는 요청이 있어 호출부에서 줄여 쓸 수
+    있게 인자로 뺐다(기본값 6은 환자 선택 목록과 동일).
+
+    주의: 순수 텍스트 항목(QListWidgetItem(text))을 쓰는 목록(스트레칭 코스
+    목록)은 선택 시 Qt 기본 팔레트가 글자색을 흰색으로 바꿔버려서 옅은 파란
+    배경 위에 글자가 거의 안 보이는 문제가 있었다 — item/item:selected 양쪽에
+    글자색을 명시해서 고정한다. (카드형 위젯을 끼워 넣는 목록은 라벨 자체에
+    색이 박혀있어 원래도 문제 없었다.)"""
+    list_widget.setSpacing(spacing)
     list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     list_widget.setFrameShape(QFrame.Shape.NoFrame)
     list_widget.setStyleSheet(
         "QListWidget { background:transparent; border:none; }"
         "QListWidget::item { background:#ffffff; border:1px solid #e5e7eb; "
-        "border-radius:10px; padding:8px 10px; }"
-        "QListWidget::item:selected { background:#eff6ff; border:1.5px solid #2563eb; }"
+        "border-radius:10px; padding:8px 10px; color:#111827; }"
+        "QListWidget::item:selected { background:#eff6ff; border:1.5px solid #2563eb; "
+        "color:#111827; }"
         "QListWidget::item:hover:!selected { border-color:#93c5fd; }"
     )
 
@@ -98,6 +109,9 @@ def build_patient_card(patient):
     widget = QWidget()
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     widget.setStyleSheet("background:transparent;")
+    # 아래쪽 줄이 없는(sub_text 빈) 카드도 최소 높이를 보장 — populate_patient_list()의
+    # sizeHint 계산과 맞물려 행 높이가 들쭉날쭉해지는 것을 막는다.
+    widget.setMinimumHeight(36)
     layout = QVBoxLayout(widget)
     layout.setContentsMargins(2, 0, 2, 0)
     layout.setSpacing(2)
@@ -117,3 +131,25 @@ def build_patient_card(patient):
         layout.addWidget(bottom)
 
     return widget
+
+
+def populate_patient_list(list_widget, patients):
+    """환자 카드형 목록을 채우는 공용 함수(보행/스트레칭 탭 공용 — 기존엔 두
+    탭에 똑같은 코드가 중복돼 있었다).
+
+    버그 수정: 예전 코드는 `item.setSizeHint(card.sizeHint())`를 카드를
+    리스트에 끼워 넣기(addItem/setItemWidget) *전에* 호출했다. 그 시점엔
+    카드의 스타일시트(폰트 크기 등)가 아직 폴리시(polish)되지 않아
+    sizeHint()가 실제보다 작게 나올 수 있고, 그러면 리스트가 그 행에 실제
+    카드보다 좁은 공간만 배정해서 다음 행 카드와 겹쳐 그려진다 — 이게
+    "환자 목록 글자가 깨져 보인다"는 증상의 원인이었다. 리스트에 먼저
+    끼워 넣은 뒤(카드가 리스트의 폰트/팔레트를 실제로 상속받은 뒤) sizeHint를
+    다시 읽어서 넣어주면 해결된다."""
+    list_widget.clear()
+    for p in patients:
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, p)
+        card = build_patient_card(p)
+        list_widget.addItem(item)
+        list_widget.setItemWidget(item, card)
+        item.setSizeHint(card.sizeHint())

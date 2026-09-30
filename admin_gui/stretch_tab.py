@@ -44,7 +44,7 @@ from .qt_compat import (
     Qt, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
 )
-from .ui_kit import build_patient_card, make_section_panel, style_selectable_list
+from .ui_kit import make_section_panel, populate_patient_list, style_selectable_list
 
 SKELETON_SUFFIX = '_skeleton.json'
 
@@ -188,7 +188,7 @@ class StretchingTab(QWidget):
         self.patient_list = QListWidget()
         style_selectable_list(self.patient_list)
         patient_content.addWidget(self.patient_list)
-        self._populate_patient_list(self.patients)
+        populate_patient_list(self.patient_list, self.patients)
         left.addWidget(patient_panel, stretch=1)
 
         left_widget = QWidget()
@@ -237,8 +237,12 @@ class StretchingTab(QWidget):
         # 높이 상한을 두면 "스트레칭 선택" 제목 영역은 그대로인데 목록만 작게
         # 눌려 보인다 — 상한을 없애고 course_panel에 stretch를 줘서(아래) 남는
         # 세로 공간을 목록이 가져가게 한다(QListWidget은 기본이 세로 Expanding).
-        # 선택 시 카드처럼 파란 테두리로 강조되는 스타일도 환자 목록과 통일.
-        style_selectable_list(self.course_list)
+        # 선택 시 카드처럼 파란 테두리로 강조되는 스타일도 환자 목록과 통일하되,
+        # 항목 사이 간격은 환자 목록(6px)보다 좁게(3px) — 운동 항목이 서로 너무
+        # 떨어져 보인다는 피드백. (item:selected 글자색을 명시하지 않으면 Qt
+        # 기본 팔레트가 선택 시 흰 글씨로 바꿔서 옅은 파란 배경 위에 안 보이는
+        # 문제도 style_selectable_list 쪽에서 함께 고쳤다.)
+        style_selectable_list(self.course_list, spacing=3)
         if not self.courses:
             placeholder = QListWidgetItem(f"'{stretch_dir}' 폴더에서 영상을 찾지 못했습니다")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -260,20 +264,10 @@ class StretchingTab(QWidget):
 
         root.addLayout(right, stretch=1)
 
-    def _populate_patient_list(self, patients):
-        self.patient_list.clear()
-        for p in patients:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, p)
-            card = build_patient_card(p)
-            item.setSizeHint(card.sizeHint())
-            self.patient_list.addItem(item)
-            self.patient_list.setItemWidget(item, card)
-
     def _filter_patients(self, text):
         text = text.strip()
         filtered = [p for p in self.patients if text in p.name] if text else self.patients
-        self._populate_patient_list(filtered)
+        populate_patient_list(self.patient_list, filtered)
 
     def set_patients(self, patients):
         """main_server에서 환자 목록이 도착하면 app.py가 호출 (검색어는 유지)"""

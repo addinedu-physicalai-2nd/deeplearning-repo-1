@@ -34,15 +34,19 @@ antalgic/abnormal)은 ai_server/models/의 모델 파일명(model_*.pth)에서
   - 환자 선택 목록은 DB에서 가져온 결과가 카드처럼 쌓이는 느낌을 주려고
     카드형 항목(이름 굵게 위 / 병실·ID 회색 아래)으로 바꾸고, 선택 시 파란
     테두리로 강조된다(ui_kit.build_patient_card/style_selectable_list).
+    환자 카드 목록을 채우는 로직은 스트레칭 탭과 공유(ui_kit.populate_patient_list)
+    — 예전엔 각 탭에 따로 있었는데, sizeHint 계산 순서가 잘못돼 있어서 카드
+    글자가 깨져(다음 줄과 겹쳐) 보이는 버그가 있었다. 공용 함수로 합치면서 같이
+    고쳤다(ui_kit.py의 populate_patient_list 주석 참고).
 """
 from . import db_client
 from .drawing import fit_to_view, to_pixmap
 from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
     Qt, QColor, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPainter, QPen, QPushButton, QRectF, QVBoxLayout, QWidget,
+    QPainter, QPen, QPushButton, QRectF, QVBoxLayout, QWidget,
 )
-from .ui_kit import build_patient_card, make_section_panel, style_pill_badge, style_selectable_list
+from .ui_kit import make_section_panel, populate_patient_list, style_pill_badge, style_selectable_list
 
 # TODO(보행 데이터 연동 담당자): 실제 gait_analyzer.py의 cumulative_scores 키와
 # 맞는지 확인/수정 필요. 현재는 ai_server/models/의 model_*.pth 파일명에서 추론.
@@ -153,7 +157,7 @@ class GaitTab(QWidget):
         style_selectable_list(self.patient_list)
         self.patient_list.currentRowChanged.connect(self._on_select_patient)
         patient_content.addWidget(self.patient_list)
-        self._populate_patient_list(self.patients)
+        populate_patient_list(self.patient_list, self.patients)
         left.addWidget(patient_panel, stretch=1)
 
         left_widget = QWidget()
@@ -267,20 +271,10 @@ class GaitTab(QWidget):
         layout.addStretch()
         return container, pct_labels
 
-    def _populate_patient_list(self, patients):
-        self.patient_list.clear()
-        for p in patients:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, p)
-            card = build_patient_card(p)
-            item.setSizeHint(card.sizeHint())
-            self.patient_list.addItem(item)
-            self.patient_list.setItemWidget(item, card)
-
     def _filter_patients(self, text):
         text = text.strip()
         filtered = [p for p in self.patients if text in p.name or text in p.room] if text else self.patients
-        self._populate_patient_list(filtered)
+        populate_patient_list(self.patient_list, filtered)
 
     def set_patients(self, patients):
         """main_server에서 환자 목록이 도착하면 app.py가 호출 (검색어는 유지)"""
@@ -319,6 +313,29 @@ class GaitTab(QWidget):
         self.donut.hide()
         self.legend_widget.hide()
         self.empty_label.show()
+
+    def reset_analysis(self):
+        """다른 탭으로 전환될 때 app.py가 호출 — 버그 수정: 예전엔 "보행 분석
+        시작"을 눌러둔 채로 낙상/스트레칭 탭에 갔다가 보행 탭으로 돌아오면
+        분석이 계속 켜진 상태(+카메라 영상도 계속 흐르던 상태)로 남아있었다.
+        탭을 벗어나는 순간 분석을 멈추고 카메라 영상을 꺼서 화면을 처음
+        상태로 되돌린다. active_camera_id를 None으로 비우면 show_frame()이
+        더 이상 프레임을 그리지 않는다(이후 mode=1 프레임은 무시됨).
+
+        환자 선택 자체는 유지한다 — 탭으로 돌아왔을 때 환자를 다시 고를
+        필요 없이 "보행 분석 시작"만 다시 누르면 되게 하기 위함."""
+        if not self.analyzing and self.active_camera_id is None:
+            return   # 이미 초기 상태 — 할 일 없음
+        self.analyzing = False
+        self.active_camera_id = None
+        self.video_label.clear()
+        if self.selected is not None:
+            self.toggle_btn.setText("보행 분석 시작")
+            self.toggle_btn.setEnabled(True)
+        else:
+            self.toggle_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
+        self._show_empty_state()
 
     def _toggle_analysis(self):
         if self.selected is None:
