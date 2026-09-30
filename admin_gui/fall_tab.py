@@ -240,13 +240,15 @@ class FallTab(QWidget):
         self.notif_stack.addStretch()
         notif_content.addLayout(self.notif_stack)
 
-        # 카메라 박스와 메시지 알림 패널의 높이가 서로 달라도(알림 개수에 따라
-        # 패널 높이가 들쭉날쭉해질 수 있음) 둘 다 위쪽 기준으로 나란히 맞춘다 —
-        # 기본값(늘려 채우기)으로 두면 한쪽이 짧을 때 위치가 미묘하게 어긋나 보인다.
+        # 메시지 알림 패널이 101호/102호 카메라 박스와 같은 줄 위치·높이를
+        # 갖도록, 정렬을 따로 지정하지 않는다 — QHBoxLayout 기본 동작이 두
+        # 위젯을 행 높이(=더 큰 쪽인 카메라 박스 높이)에 맞춰 위아래로
+        # 늘려서 채우기 때문에, 이대로 두면 시작 위치와 높이가 저절로
+        # 카메라 박스와 맞는다. (이전에 AlignTop을 줬던 건 별도의 다른
+        # 정렬 문제 때문이었는데, 그 결과로 패널이 늘어나지 않게 돼서
+        # 지금의 "위치/높이가 안 맞는" 문제가 생겼다 — 그래서 제거한다.)
         content.addWidget(grid_widget, stretch=3)
         content.addWidget(notif_panel, stretch=1)
-        content.setAlignment(grid_widget, Qt.AlignmentFlag.AlignTop)
-        content.setAlignment(notif_panel, Qt.AlignmentFlag.AlignTop)
 
         outer.addLayout(content)
 
@@ -254,7 +256,9 @@ class FallTab(QWidget):
         # 통합했다(각 줄 앞에 "[101호]" 식으로 병실을 표시해서 구분).
         log_panel, log_content, _ = make_section_panel("낙상 로그")
         self.log_list = QListWidget()
-        self.log_list.setFixedHeight(110)
+        # 고정 높이를 주면 목록이 회색 패널보다 작아 보여서(패널만 늘어남)
+        # 부자연스럽다 — 고정 높이를 없애고, 아래에서 log_panel에 stretch를
+        # 줘서 목록(QListWidget 기본이 세로로 Expanding)이 패널을 꽉 채우게 한다.
         self.log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.log_list.setStyleSheet(
             "QListWidget { border:1px solid #e5e7eb; border-radius:8px; "
@@ -262,7 +266,11 @@ class FallTab(QWidget):
             "QListWidget::item { padding:4px 8px; border:none; }"
         )
         log_content.addWidget(self.log_list)
-        outer.addWidget(log_panel)
+        # 카메라 박스 줄(content)은 고정 크기 영상으로 정해지는 자연 높이를
+        # 그대로 쓰고, 남는 세로 공간은 낙상 로그 패널이 가져가게 한다 —
+        # 창 높이에 따라 로그 패널이 늘거나 줄어서, 이전처럼 고정 높이 때문에
+        # 하단이 잘리는 문제도 같이 줄어든다.
+        outer.addWidget(log_panel, stretch=1)
 
     def set_patients(self, patients):
         """main_server에서 환자 목록이 도착하면 app.py가 호출 — Patient.camera_id(낙상 카메라 배정)로 환자명 갱신"""

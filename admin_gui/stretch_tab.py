@@ -206,7 +206,10 @@ class StretchingTab(QWidget):
         self.ref_view.setFixedSize(VIEW_W, VIEW_H)
         self.ref_view.setStyleSheet("background:#0d0d10; border-radius:10px;")
         self.ref_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ref_content.addWidget(self.ref_view)
+        # ref_view는 고정 크기라, 정렬을 안 주면 QVBoxLayout 기본값(왼쪽 정렬)대로
+        # 패널이 넓어질수록 왼쪽에 치우쳐 보인다 — 가로 중앙 정렬로 맞춘다
+        # (fall_tab/gait_tab의 video_label과 동일한 처리).
+        ref_content.addWidget(self.ref_view, alignment=Qt.AlignmentFlag.AlignHCenter)
         views.addWidget(ref_panel)
 
         # 결과(코스 이름/평균 점수)는 세션 종료 후 우측 화면 자체(검정 결과 화면)에
@@ -217,7 +220,7 @@ class StretchingTab(QWidget):
         self.my_view.setFixedSize(VIEW_W, VIEW_H)
         self.my_view.setStyleSheet("background:#0d0d10; border-radius:10px;")
         self.my_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        my_content.addWidget(self.my_view)
+        my_content.addWidget(self.my_view, alignment=Qt.AlignmentFlag.AlignHCenter)
         views.addWidget(my_panel)
 
         right.addLayout(views)
@@ -228,7 +231,9 @@ class StretchingTab(QWidget):
         # 간격이 붙어 보인다.
         course_content.setSpacing(6)
         self.course_list = QListWidget()
-        self.course_list.setMaximumHeight(150)
+        # 높이 상한을 두면 "스트레칭 선택" 제목 영역은 그대로인데 목록만 작게
+        # 눌려 보인다 — 상한을 없애고 course_panel에 stretch를 줘서(아래) 남는
+        # 세로 공간을 목록이 가져가게 한다(QListWidget은 기본이 세로 Expanding).
         if not self.courses:
             placeholder = QListWidgetItem(f"'{stretch_dir}' 폴더에서 영상을 찾지 못했습니다")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -243,7 +248,10 @@ class StretchingTab(QWidget):
         self.start_btn.clicked.connect(self.start_video)
         course_content.addWidget(self.start_btn)
 
-        right.addWidget(course_panel)
+        # views(기준 동작/실시간 카메라)는 고정 크기 영상으로 자연 높이가 정해지고,
+        # 남는 세로 공간은 course_panel(스트레칭 선택)이 가져간다 — 창 높이에 따라
+        # 목록이 늘거나 줄어서 하단이 잘리는 문제도 같이 줄어든다.
+        right.addWidget(course_panel, stretch=1)
 
         root.addLayout(right, stretch=1)
 
