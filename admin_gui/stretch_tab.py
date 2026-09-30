@@ -26,7 +26,7 @@
   3) main_server에 start_stretching 명령(기준 자세 JSON 절대경로 포함)을 보낸다.
   4) 우측 영상에는 그 환자의 실시간 카메라 영상(거울처럼 좌우 반전) + 부위별 색이
      입혀진 스켈레톤 + 판정 뱃지를 보여준다.
-  5) 결과의 frame_idx가 기준 스켈레톤 마지막 인덱스에 도달하면 우측 화면을 검정
+  5) 결과의 ref_idx가 기준 스켈레톤 마지막 인덱스에 도달하면 우측 화면을 검정
      결과 화면(코스 이름 + 평균 점수)으로 바꾼다 — main_server의 세션 종료 조건과
      같은 기준이라 화면에 나온 프레임 / 로컬 평균 / DB 평균이 모두 같은 범위가 된다.
 """
@@ -49,7 +49,7 @@ SKELETON_SUFFIX = '_skeleton.json'
 # 보행 탭(480x360)보다 크게 — 좌우 영상이 화면의 실질적인 주인공이므로.
 VIEW_W, VIEW_H = 560, 420
 
-# 우측 화면 종료 기준은 결과의 frame_idx가 기준 스켈레톤 마지막 인덱스에 도달했을
+# 우측 화면 종료 기준은 결과의 ref_idx가 기준 스켈레톤 마지막 인덱스에 도달했을
 # 때다(main_server의 _track_stretch_score와 같은 조건). 좌측 영상 재생 타이머와
 # 카메라→서버→GUI 파이프라인은 서로 다른 시계라서, 좌측이 끝나는 시점을 기준으로
 # 우측을 잠그면 파이프라인 지연만큼(약 1~2초) 아직 도착 안 한 "세션 안의 정상 프레임"이
@@ -126,7 +126,7 @@ class StretchingTab(QWidget):
         self.score_history = []
         self.active_course_label = None
         # 기준 스켈레톤의 마지막 frame_index (0부터 재정렬된 값). main_server의
-        # session['last_idx']와 같은 값 — 이 인덱스의 결과가 오면 우측 화면을 멈춘다.
+        # session['last_idx']와 같은 값 — ref_idx가 여기 도달하면 우측 화면을 멈춘다.
         self.last_ref_idx = None
         # "몇 번째 세션인지" 세는 값. start_video()를 누를 때마다 하나씩 증가한다.
         # 그레이스 타이머(finish_timer)나 뒤늦게 도착한 on_session_end가 "지금 이미
@@ -138,6 +138,12 @@ class StretchingTab(QWidget):
         self.finished_gen = None
         self.session_start_time = 0.0
         self.ref_cap = None
+        # 좌측 기준영상은 타이머 틱 수가 아니라 "시작 후 경과 시간 × fps"로 보여줄 프레임을
+        # 고른다 — GUI가 바빠서 틱이 밀려도 제 속도로 재생되고, main_server의 ref_idx와
+        # 같은 시계를 쓰게 된다. ref_pos: 다음에 read()할 프레임 번호
+        self.ref_fps = None
+        self.ref_start_time = 0.0
+        self.ref_pos = 0
         self.ref_timer = QTimer()
         self.ref_timer.timeout.connect(self._next_ref_frame)
         # 좌측 영상이 끝난 뒤 FINISH_GRACE_MS만큼만 기다렸다가 우측을 잠근다
@@ -327,15 +333,17 @@ class StretchingTab(QWidget):
         if not self.session_ended:
             self._finish_session()
 
-    def _reached_last_ref_frame(self, frame_idx):
+    def _reached_last_ref_frame(self, ref_idx):
         """이 결과가 기준 영상의 마지막 프레임에 해당하는지.
-        새 세션 시작 직후(STALE_END_GUARD_SEC 이내)에 오는 큰 frame_idx는 이전 세션이
+        ref_idx는 main_server가 "세션 시작 후 경과 시간 × 기준영상 FPS"로 매긴 번호라
+        좌측 영상 재생 위치와 같은 시계다.
+        새 세션 시작 직후(STALE_END_GUARD_SEC 이내)에 오는 큰 ref_idx는 이전 세션이
         큐에 남겨둔 결과일 수 있으므로 종료로 치지 않는다."""
-        if frame_idx is None or self.last_ref_idx is None:
+        if ref_idx is None or self.last_ref_idx is None:
             return False
         if time.monotonic() - self.session_start_time < STALE_END_GUARD_SEC:
             return False
-        return frame_idx >= self.last_ref_idx
+        return ref_idx >= self.last_ref_idx
 
     def _course_by_id(self, course_id):
         for course in self.courses:
@@ -379,29 +387,47 @@ class StretchingTab(QWidget):
             "camera_id": camera_id,
             "patient_id": patient.patient_id,
             "reference": skeleton_path,
+            "ref_fps": self.ref_fps,     # main_server가 경과 시간 → 기준 인덱스 변환에 사용
         })
 
     def _start_reference_player(self, video_path):
         """좌측 '기준 동작' 영상 재생 (환자가 보고 따라할 실제 시범 영상).
-        끝까지 재생되면 반복하지 않고 마지막 프레임에서 멈춘다(_next_ref_frame 참고)."""
+        끝까지 재생되면 반복하지 않고 마지막 프레임에서 멈춘다(_next_ref_frame 참고).
+        재생 속도는 경과 시간 기준이라 타이머 틱은 프레임 간격의 절반으로 촘촘하게 준다."""
         self.ref_timer.stop()
         if self.ref_cap is not None:
             self.ref_cap.release()
+        self.ref_fps = None
         self.ref_cap = cv2.VideoCapture(video_path)
         if not self.ref_cap.isOpened():
             print(f"[StretchTab] 기준 동작 영상 열기 실패: {video_path}")
             return
-        fps = self.ref_cap.get(cv2.CAP_PROP_FPS) or 15.0
-        self.ref_timer.start(max(20, int(1000 / fps)))
+        self.ref_fps = self.ref_cap.get(cv2.CAP_PROP_FPS) or 15.0
+        self.ref_pos = 0
+        self.ref_start_time = time.monotonic()
+        self.ref_timer.start(max(10, int(500 / self.ref_fps)))
 
     def _next_ref_frame(self):
         if self.ref_cap is None:
             return
-        ok, frame = self.ref_cap.read()
+        # 지금 시각에 보여줘야 할 프레임 번호 (main_server의 ref_idx와 같은 계산)
+        target = int((time.monotonic() - self.ref_start_time) * self.ref_fps)
+        if target < self.ref_pos:
+            return          # 아직 다음 프레임 차례가 아님
+
+        ok = True
+        while ok and self.ref_pos < target:
+            ok = self.ref_cap.grab()     # 밀린 프레임은 디코딩 없이 건너뜀
+            self.ref_pos += 1
+        frame = None
+        if ok:
+            ok, frame = self.ref_cap.read()
+            self.ref_pos += 1
+
         if not ok:
             # 기준 동작 영상은 반복 재생하지 않는다 — 끝나면 타이머만 멈추고
             # 마지막으로 표시했던 프레임을 화면에 그대로 남겨둔다. 우측 화면 종료는
-            # on_result()에서 마지막 frame_idx가 도착했을 때 하고, 여기서는 결과가
+            # on_result()에서 마지막 ref_idx가 도착했을 때 하고, 여기서는 결과가
             # 끊긴 경우를 대비한 안전장치 타이머(FINISH_GRACE_MS)만 걸어둔다.
             self.ref_timer.stop()
             if not self.session_ended:
@@ -428,15 +454,15 @@ class StretchingTab(QWidget):
         뱃지 점수 텍스트가 거꾸로 뒤집혀 나오지 않고, keypoints도 같은 기준(프레임
         폭)으로 같이 반전시켜서 스켈레톤이 반전된 영상과 어긋나지 않게 맞춘다.
 
-        결과의 frame_idx가 기준 스켈레톤 마지막 인덱스에 도달하면 그 자리에서
-        세션 종료 화면으로 바꾼다 — 좌측 영상 타이머와 무관하게 서버와 같은 기준."""
+        결과의 ref_idx가 기준 스켈레톤 마지막 인덱스에 도달하면 그 자리에서
+        세션 종료 화면으로 바꾼다 — main_server와 같은 기준(경과 시간 기반)."""
         if camera_id != self.active_camera_id:
             return
         if self.session_ended:
             # 세션이 이미 끝나서 검정 결과 화면을 띄워둔 상태 — 뒤늦게 도착하는
             # 프레임으로 다시 덮어쓰지 않는다. (새 시작을 누르면 start_video()에서 해제)
             return
-        frame_idx = msg.get('frame_idx')
+        ref_idx = msg.get('ref_idx')      # main_server가 비교에 쓴 기준영상 프레임 번호
         data = msg.get('data', {})
         tracking = data.get('tracking_data', {})
 
@@ -471,7 +497,7 @@ class StretchingTab(QWidget):
             draw_stretch_badge(view, level, score)
             self.my_view.setPixmap(to_pixmap(view))
 
-        if self._reached_last_ref_frame(frame_idx):
+        if self._reached_last_ref_frame(ref_idx):
             # 기준 영상 마지막 프레임까지 도착 → 서버와 같은 시점에 종료 화면으로 전환
             self.finish_timer.stop()
             self._finish_session()

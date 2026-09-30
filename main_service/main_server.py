@@ -20,6 +20,7 @@ MODE_STRETCH = 2
 
 UPDATE_INTERVAL_SEC = 0.01   # 결과 처리 주기 (100Hz) — 50ms 배치 대기로 생기는 지연/몰림 감소
 STATUS_LOG_SEC = 5.0         # 수신 현황 로그 주기
+DEFAULT_REF_FPS = 15.0       # GUI가 ref_fps를 안 보냈을 때 쓰는 기준영상 FPS
 
 
 def load_reference(path):
@@ -116,6 +117,10 @@ class MainService:
                 patient = self.db.get_patient_by_camera(camera_id)
                 patient_id = patient['patient_id'] if patient else None
             last_idx = max((s['frame_index'] for s in reference['skeletons']), default=0)
+            try:
+                ref_fps = float(cmd.get('ref_fps') or DEFAULT_REF_FPS)
+            except (TypeError, ValueError):
+                ref_fps = DEFAULT_REF_FPS
 
             with self.state_lock:
                 stopped = self.stretch_sessions.pop(camera_id, None)
@@ -123,12 +128,17 @@ class MainService:
                 self.analyzers[MODE_STRETCH] = self.stretching_analyzer
                 self.frame_idx[camera_id] = 0
                 self.modes[camera_id] = MODE_STRETCH
+                # 기준 인덱스는 카메라 프레임 개수가 아니라 "세션 시작 후 경과 시간 × 기준영상 FPS"로
+                # 매긴다 — 카메라(15fps)와 기준영상(예: 23.976fps)의 FPS가 달라도 GUI 좌측 영상과
+                # 같은 시계로 비교/종료되게. ref_idx_map: frame_idx → 그 프레임이 도착한 시점의 ref_idx
                 self.stretch_sessions[camera_id] = {
                     'patient_id': patient_id, 'course_id': course_id, 'course_name': course_name,
                     'last_idx': last_idx, 'scores': [],
+                    'start_time': time.monotonic(), 'ref_fps': ref_fps, 'ref_idx_map': {},
                 }
             self._finish_stretch_session(camera_id, stopped, completed=False)
-            self.logger.info(f"[{camera_id}] stretching start: {course_name} ({len(reference['skeletons'])} ref frames, "
+            self.logger.info(f"[{camera_id}] stretching start: {course_name} ({len(reference['skeletons'])} ref frames "
+                             f"@ {ref_fps:.3f}fps, "
                              f"patient={patient_id}), frame_idx reset")
 
         elif name == 'set_mode':
@@ -181,7 +191,7 @@ class MainService:
             'saved': saved,
         })
 
-    def _track_stretch_score(self, camera_id, frame_idx, gui_data):
+    def _track_stretch_score(self, camera_id, ref_idx, gui_data):
         """스트레칭 결과 1프레임을 세션에 누적. 기준 영상 마지막 프레임을 지나면 세션 완료 + 기본 모드로 복귀"""
         finished = None
         with self.state_lock:
@@ -192,7 +202,7 @@ class MainService:
             if tracking:
                 first = next(iter(tracking.values()))       # 화면에는 한 명만 표시하므로 첫 번째 사람 기준
                 session['scores'].append(first['overall']['score'])
-            if frame_idx >= session['last_idx']:
+            if ref_idx >= session['last_idx']:
                 finished = self.stretch_sessions.pop(camera_id)
                 self.modes[camera_id] = self.default_mode
         self._finish_stretch_session(camera_id, finished, completed=True)
@@ -203,6 +213,11 @@ class MainService:
             frame_idx = self.frame_idx[camera_id]
             self.frame_idx[camera_id] += 1
             mode = self.modes[camera_id]
+            session = self.stretch_sessions.get(camera_id)
+            if mode == MODE_STRETCH and session is not None:
+                # 프레임이 main에 도착한 시각 기준으로 기준영상의 몇 번째 프레임인지 기록
+                elapsed = time.monotonic() - session['start_time']
+                session['ref_idx_map'][frame_idx] = int(elapsed * session['ref_fps'])
         self.frame_counter[camera_id] += 1
 
         self.net.send_frame(camera_id, mode, frame_idx, jpg_bytes)
@@ -227,21 +242,34 @@ class MainService:
                         issued = self.frame_idx[camera_id]
                     if frame_idx is None or frame_idx >= issued:
                         continue
+                    ref_idx = None
+                    if aioutput.get('mode') == MODE_STRETCH:
+                        with self.state_lock:
+                            session = self.stretch_sessions.get(camera_id)
+                            if session is not None:
+                                ref_idx = session['ref_idx_map'].pop(frame_idx, None)
+                        if ref_idx is None:
+                            continue    # 세션 밖(시작 전/종료 후) 프레임의 결과 → 버림
+                        # StretchingAnalyzer는 aioutput['frame_idx']로 기준 스켈레톤을 찾으므로
+                        # 분석에 쓰는 사본에만 ref_idx를 넣는다 (원본 frame_idx는 GUI 영상 매칭용)
+                        analyze_input = {**aioutput, 'frame_idx': ref_idx}
+                    else:
+                        analyze_input = aioutput
                     try:
-                        gui_data = self._analyze(aioutput)
+                        gui_data = self._analyze(analyze_input)
                     except Exception as e:
                         self.logger.error(f"[{camera_id}] Analyze error (mode={aioutput.get('mode')}): {e}")
                         continue
                     if gui_data is None:
                         continue
-                    self.send_to_gui(camera_id, aioutput, gui_data)
+                    self.send_to_gui(camera_id, aioutput, gui_data, ref_idx)
 
                     mode = aioutput.get('mode')
                     if mode == MODE_FALL:
                         for event in gui_data.get('events', []):
                             self.db.log_fall_event(camera_id, event.get('track_id'), event.get('event', ''))
                     elif mode == MODE_STRETCH:
-                        self._track_stretch_score(camera_id, frame_idx, gui_data)
+                        self._track_stretch_score(camera_id, ref_idx, gui_data)
 
             time.sleep(UPDATE_INTERVAL_SEC)
 
@@ -263,7 +291,7 @@ class MainService:
                 info['keypoints_px'] = pixel_kps.get(track_id)
         return gui_data
 
-    def send_to_gui(self, camera_id, aioutput, gui_data):
+    def send_to_gui(self, camera_id, aioutput, gui_data, ref_idx=None):
         message = {
             'camera_id': camera_id,
             'mode': aioutput.get('mode'),
@@ -271,6 +299,8 @@ class MainService:
             'timestamp': aioutput.get('timestamp'),
             'data': gui_data,
         }
+        if ref_idx is not None:
+            message['ref_idx'] = ref_idx    # 스트레칭: 비교에 쓴 기준영상 프레임 번호 (GUI 종료 판단용)
         self.net.send_to_gui(message)
 
     def _log_status(self):
