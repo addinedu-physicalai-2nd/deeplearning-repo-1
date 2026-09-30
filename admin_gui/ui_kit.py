@@ -122,13 +122,14 @@ def build_patient_card(patient):
     top.setStyleSheet("font-size:13px; font-weight:600; color:#111827; border:none; background:transparent;")
     layout.addWidget(top)
 
-    room = getattr(patient, 'room', '') or ''
-    pid = getattr(patient, 'patient_id', '') or ''
-    sub_text = ' · '.join(str(v) for v in (room, pid) if v)
-    if sub_text:
-        bottom = QLabel(sub_text)
-        bottom.setStyleSheet("font-size:11px; color:#9ca3af; border:none; background:transparent;")
-        layout.addWidget(bottom)
+    #아래 호수 표기
+    # room = getattr(patient, 'room', '') or ''
+    # pid = getattr(patient, 'patient_id', '') or ''
+    # sub_text = ' · '.join(str(v) for v in (room, pid) if v)
+    # if sub_text:
+    #     bottom = QLabel(sub_text)
+    #     bottom.setStyleSheet("font-size:11px; color:#9ca3af; border:none; background:transparent;")
+    #     layout.addWidget(bottom)
 
     return widget
 
