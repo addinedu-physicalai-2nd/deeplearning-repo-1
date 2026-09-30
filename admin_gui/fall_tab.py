@@ -27,6 +27,12 @@ main_server 환자 목록(get_patients)의 camera_id로 채워서 보여주고, 
 매번 알림이 쌓여 피로해지는 문제를 막기 위함(사용자 확인 완료, 로직 변경
 승인됨).
 
+자동 탭 전환: 낙상 AI는 사용자가 보행/스트레칭 탭에서 작업 중이어도 항상
+백그라운드에서 돌고 있으므로, 새 낙상(빨강) 알림이 뜨는 순간 fall_detected
+시그널을 쏴서 app.py가 화면을 즉시 낙상 탭으로 전환하게 한다 — 다른 탭을
+보고 있다가 낙상 발생을 놓치는 일이 없도록(사용자 확인 완료, 로직 변경
+승인됨). 주의(주황) 알림은 탭을 전환하지 않는다.
+
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
 새어 들어가서 뱃지가 세로로 길게 늘어나는 버그가 생긴다 — header 컨테이너와
@@ -210,6 +216,10 @@ class ResolveFallDialog(QDialog):
 
 
 class FallTab(QWidget):
+    # 새 낙상(빨강) 알림이 뜰 때마다 emit — app.py가 받아서 지금 어느 탭을
+    # 보고 있든 낙상 탭으로 화면을 전환한다(주의/주황 알림은 emit하지 않음).
+    fall_detected = pyqtSignal()
+
     def __init__(self, link):
         super().__init__()
         self.link = link
@@ -227,8 +237,34 @@ class FallTab(QWidget):
         content = QHBoxLayout()
         content.setSpacing(16)
 
+        # 좌측 컬럼: 카메라 그리드(자연 높이 고정) + 낙상 로그(남는 세로 공간을
+        # 전부 가져감)를 세로로 쌓는다. 이렇게 하면 (1) 로그 패널의 가로 폭이
+        # 카메라 박스 줄과 자동으로 같아지고, (2) 우측 메시지 알림 패널이 더
+        # 길어져서 이 컬럼 전체를 늘려 채워야 할 때도, 그 여유 공간이 카메라
+        # 박스 쪽이 아니라 로그 패널 쪽으로만 들어간다 — 예전에는 로그 패널이
+        # 컬럼 바깥(outer)에 따로 있어서, 알림이 많이 쌓이면 그 차이만큼
+        # 카메라 박스 자체가 억지로 늘어나 카드 안쪽에 빈 흰 공간이 남았었다.
+        left_column = QVBoxLayout()
+        left_column.setSpacing(16)
+
         grid_widget = QWidget()
         self._build_grid(grid_widget)
+        left_column.addWidget(grid_widget)
+
+        # 낙상 로그 — 카메라별로 따로 있던 것을 탭 전체에서 공유하는 패널 하나로
+        # 통합했다(각 줄 앞에 "[101호]" 식으로 병실을 표시해서 구분).
+        log_panel, log_content, _ = make_section_panel("낙상 로그")
+        self.log_list = QListWidget()
+        # 고정 높이를 주지 않는다 — 아래 stretch=1로 남는 세로 공간을 이
+        # 패널(과 그 안의 QListWidget, 기본이 세로 Expanding)이 가져가게 한다.
+        self.log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.log_list.setStyleSheet(
+            "QListWidget { border:1px solid #e5e7eb; border-radius:8px; "
+            "background:#ffffff; font-size:12px; color:#374151; } "
+            "QListWidget::item { padding:4px 8px; border:none; }"
+        )
+        log_content.addWidget(self.log_list)
+        left_column.addWidget(log_panel, stretch=1)
 
         # 우측 알림 목록 — 낙상 팝업과는 별개의 "패널"임을 한눈에 알 수 있게
         # 회색 배경 + "메시지 알림" 제목을 얹은 하나의 섹션으로 감싼다.
@@ -240,37 +276,14 @@ class FallTab(QWidget):
         self.notif_stack.addStretch()
         notif_content.addLayout(self.notif_stack)
 
-        # 메시지 알림 패널이 101호/102호 카메라 박스와 같은 줄 위치·높이를
-        # 갖도록, 정렬을 따로 지정하지 않는다 — QHBoxLayout 기본 동작이 두
-        # 위젯을 행 높이(=더 큰 쪽인 카메라 박스 높이)에 맞춰 위아래로
-        # 늘려서 채우기 때문에, 이대로 두면 시작 위치와 높이가 저절로
-        # 카메라 박스와 맞는다. (이전에 AlignTop을 줬던 건 별도의 다른
-        # 정렬 문제 때문이었는데, 그 결과로 패널이 늘어나지 않게 돼서
-        # 지금의 "위치/높이가 안 맞는" 문제가 생겼다 — 그래서 제거한다.)
-        content.addWidget(grid_widget, stretch=3)
+        # 정렬을 따로 지정하지 않는다 — QHBoxLayout 기본 동작이 좌측 컬럼과
+        # 메시지 알림 패널을 서로 같은 행 높이로 위아래로 늘려서 채우기 때문에,
+        # 메시지 알림 패널이 좌측 컬럼(카메라 줄 + 낙상 로그) 전체 높이만큼
+        # 저절로 아래까지 내려온다.
+        content.addLayout(left_column, stretch=3)
         content.addWidget(notif_panel, stretch=1)
 
         outer.addLayout(content)
-
-        # 낙상 로그 — 카메라별로 따로 있던 것을 탭 전체에서 공유하는 패널 하나로
-        # 통합했다(각 줄 앞에 "[101호]" 식으로 병실을 표시해서 구분).
-        log_panel, log_content, _ = make_section_panel("낙상 로그")
-        self.log_list = QListWidget()
-        # 고정 높이를 주면 목록이 회색 패널보다 작아 보여서(패널만 늘어남)
-        # 부자연스럽다 — 고정 높이를 없애고, 아래에서 log_panel에 stretch를
-        # 줘서 목록(QListWidget 기본이 세로로 Expanding)이 패널을 꽉 채우게 한다.
-        self.log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.log_list.setStyleSheet(
-            "QListWidget { border:1px solid #e5e7eb; border-radius:8px; "
-            "background:#ffffff; font-size:12px; color:#374151; } "
-            "QListWidget::item { padding:4px 8px; border:none; }"
-        )
-        log_content.addWidget(self.log_list)
-        # 카메라 박스 줄(content)은 고정 크기 영상으로 정해지는 자연 높이를
-        # 그대로 쓰고, 남는 세로 공간은 낙상 로그 패널이 가져가게 한다 —
-        # 창 높이에 따라 로그 패널이 늘거나 줄어서, 이전처럼 고정 높이 때문에
-        # 하단이 잘리는 문제도 같이 줄어든다.
-        outer.addWidget(log_panel, stretch=1)
 
     def set_patients(self, patients):
         """main_server에서 환자 목록이 도착하면 app.py가 호출 — Patient.camera_id(낙상 카메라 배정)로 환자명 갱신"""
@@ -342,6 +355,9 @@ class FallTab(QWidget):
             card.clicked.connect(
                 lambda: self._handle_urgent_click(camera_id, room_label, patient_name, track_id, card))
             self.cards[track_id] = card
+            # 낙상 감지 즉시 알려서, 지금 보행/스트레칭 탭을 보고 있어도
+            # app.py가 낙상 탭으로 화면을 전환하게 한다.
+            self.fall_detected.emit()
         else:
             card.clicked.connect(card.remove)
         self.notif_stack.insertWidget(0, card)

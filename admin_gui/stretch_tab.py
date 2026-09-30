@@ -44,7 +44,7 @@ from .qt_compat import (
     Qt, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
 )
-from .ui_kit import make_section_panel
+from .ui_kit import build_patient_card, make_section_panel, style_selectable_list
 
 SKELETON_SUFFIX = '_skeleton.json'
 
@@ -164,29 +164,32 @@ class StretchingTab(QWidget):
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(16)
 
-        # 좌측: 환자(카메라) 검색 + 선택 — 보행 탭과 동일한 사이드바 구성
+        # 좌측: 환자(카메라) 검색 + 선택 — 보행 탭과 동일하게 "측정 카메라"/
+        # "환자 선택"을 각각 회색 섹션 패널로 나눈다.
         left = QVBoxLayout()
-        left.setSpacing(8)
+        left.setSpacing(16)
+
         # 스트레칭은 전용 측정 카메라에서 측정 → 환자와 카메라를 따로 고른다 (환자는 전체 목록)
-        camera_title = QLabel("측정 카메라")
-        camera_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        left.addWidget(camera_title)
+        camera_panel, camera_content, _ = make_section_panel("측정 카메라")
         self.camera_combo = QComboBox()
         # 역할이 'stretch'인 카메라만 (settings.CAMERA_ROLES)
         self.camera_combo.addItems([c for c in CAMERA_PORTS if CAMERA_ROLES.get(c) == 'stretch'])
-        left.addWidget(self.camera_combo)
+        camera_content.addWidget(self.camera_combo)
+        left.addWidget(camera_panel)
 
-        left_title = QLabel("환자 선택")
-        left_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        left.addWidget(left_title)
+        patient_panel, patient_content, _ = make_section_panel("환자 선택")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("환자 검색")
         self.search_input.textChanged.connect(self._filter_patients)
-        left.addWidget(self.search_input)
+        patient_content.addWidget(self.search_input)
 
+        # DB에서 가져온 환자들이 메시지 알림 카드처럼 쌓이는 느낌 — 보행 탭과
+        # 동일한 카드형 항목 + 선택 강조 스타일(ui_kit 공용 헬퍼).
         self.patient_list = QListWidget()
-        left.addWidget(self.patient_list)
+        style_selectable_list(self.patient_list)
+        patient_content.addWidget(self.patient_list)
         self._populate_patient_list(self.patients)
+        left.addWidget(patient_panel, stretch=1)
 
         left_widget = QWidget()
         left_widget.setLayout(left)
@@ -234,6 +237,8 @@ class StretchingTab(QWidget):
         # 높이 상한을 두면 "스트레칭 선택" 제목 영역은 그대로인데 목록만 작게
         # 눌려 보인다 — 상한을 없애고 course_panel에 stretch를 줘서(아래) 남는
         # 세로 공간을 목록이 가져가게 한다(QListWidget은 기본이 세로 Expanding).
+        # 선택 시 카드처럼 파란 테두리로 강조되는 스타일도 환자 목록과 통일.
+        style_selectable_list(self.course_list)
         if not self.courses:
             placeholder = QListWidgetItem(f"'{stretch_dir}' 폴더에서 영상을 찾지 못했습니다")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -258,9 +263,12 @@ class StretchingTab(QWidget):
     def _populate_patient_list(self, patients):
         self.patient_list.clear()
         for p in patients:
-            item = QListWidgetItem(p.name)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p)
+            card = build_patient_card(p)
+            item.setSizeHint(card.sizeHint())
             self.patient_list.addItem(item)
+            self.patient_list.setItemWidget(item, card)
 
     def _filter_patients(self, text):
         text = text.strip()

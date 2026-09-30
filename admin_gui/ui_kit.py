@@ -7,7 +7,9 @@
 작업)에 따라 여기로 빼서 세 탭이 공유한다. 로직은 없고 순수 스타일 헬퍼만
 모아뒀다 — 기존 동작/데이터 흐름은 전혀 건드리지 않는다.
 """
-from .qt_compat import Qt, QColor, QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget
+from .qt_compat import (
+    Qt, QColor, QFrame, QGraphicsDropShadowEffect, QLabel, QVBoxLayout, QWidget,
+)
 
 _SECTION_COUNTER = 0
 
@@ -67,3 +69,51 @@ def style_pill_badge(label, bg_color, text_color='#ffffff'):
         f"background:{bg_color}; color:{text_color}; border:none; "
         f"border-radius:12px; padding:0 12px; font-size:12px; font-weight:600;"
     )
+
+
+def style_selectable_list(list_widget):
+    """검색/조회 결과가 카드처럼 하나씩 쌓이는 느낌의 QListWidget 스타일
+    (보행/스트레칭 탭의 환자 선택·스트레칭 선택 목록에 사용). 항목 하나하나가
+    흰색 카드로 보이고, 선택된 항목은 파란 테두리+옅은 파란 배경으로 강조된다
+    (낙상 탭의 메시지 알림 카드와 같은 시각 언어)."""
+    list_widget.setSpacing(6)
+    list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    list_widget.setFrameShape(QFrame.Shape.NoFrame)
+    list_widget.setStyleSheet(
+        "QListWidget { background:transparent; border:none; }"
+        "QListWidget::item { background:#ffffff; border:1px solid #e5e7eb; "
+        "border-radius:10px; padding:8px 10px; }"
+        "QListWidget::item:selected { background:#eff6ff; border:1.5px solid #2563eb; }"
+        "QListWidget::item:hover:!selected { border-color:#93c5fd; }"
+    )
+
+
+def build_patient_card(patient):
+    """환자 선택 목록의 카드형 항목 위젯 — 이름(+나이가 있으면 같이) 굵게 위,
+    병실·환자ID 옅은 회색으로 아래. QListWidgetItem.setSizeHint()와
+    QListWidget.setItemWidget()으로 항목에 끼워 넣어서 쓴다.
+
+    age 필드는 db_client.Patient에 아직 없을 수 있어(확인 전) getattr로 안전하게
+    조회한다 — 있으면 "이름 · 나이세"로, 없으면 이름만 보여준다."""
+    widget = QWidget()
+    widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    widget.setStyleSheet("background:transparent;")
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(2, 0, 2, 0)
+    layout.setSpacing(2)
+
+    age = getattr(patient, 'age', None)
+    top_text = f"{patient.name} · {age}세" if age is not None else patient.name
+    top = QLabel(top_text)
+    top.setStyleSheet("font-size:13px; font-weight:600; color:#111827; border:none; background:transparent;")
+    layout.addWidget(top)
+
+    room = getattr(patient, 'room', '') or ''
+    pid = getattr(patient, 'patient_id', '') or ''
+    sub_text = ' · '.join(str(v) for v in (room, pid) if v)
+    if sub_text:
+        bottom = QLabel(sub_text)
+        bottom.setStyleSheet("font-size:11px; color:#9ca3af; border:none; background:transparent;")
+        layout.addWidget(bottom)
+
+    return widget

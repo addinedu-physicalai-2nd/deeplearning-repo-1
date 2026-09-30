@@ -158,10 +158,16 @@ class AdminWindow(QMainWindow):
         self._fps_ticks = 0         # mode=2가 1개 이상 들어온 tick 수 (= 체감 FPS 상한)
         self._fps_last = time.monotonic()
 
-        tabs = QTabWidget()
-        tabs.addTab(self.fall_tab, "낙상")
-        tabs.addTab(self.gait_tab, "보행")
-        tabs.addTab(self.stretch_tab, "스트레칭")
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.fall_tab, "낙상")
+        self.tabs.addTab(self.gait_tab, "보행")
+        self.tabs.addTab(self.stretch_tab, "스트레칭")
+
+        # 낙상 AI는 사용자가 보행/스트레칭 탭에 있어도 항상 백그라운드에서
+        # 돌고 있으므로, 낙상이 새로 감지되면(FallTab.fall_detected) 지금 보고
+        # 있는 탭과 상관없이 즉시 낙상 탭으로 전환한다(사용자 확인 완료, 로직
+        # 변경 승인됨).
+        self.fall_tab.fall_detected.connect(lambda: self.tabs.setCurrentWidget(self.fall_tab))
 
         # 탭 위에 "돌봄" 브랜드 헤더 — 이 창이 돌봄 GUI라는 걸 한눈에 알 수 있게.
         header = QWidget()
@@ -190,7 +196,7 @@ class AdminWindow(QMainWindow):
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         central_layout.addWidget(header)
-        central_layout.addWidget(tabs)
+        central_layout.addWidget(self.tabs)
         self.setCentralWidget(central)
 
         self.video_thread = threading.Thread(

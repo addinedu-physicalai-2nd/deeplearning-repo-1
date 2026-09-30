@@ -26,20 +26,23 @@ antalgic/abnormal)은 ai_server/models/의 모델 파일명(model_*.pth)에서
   - 카메라 화면(VIEW_W/H)을 기존 640x480에서 50% 키웠다.
   - 환자 이름/상태 뱃지를 화면 맨 위, 서로 붙여서 보여주고, 뱃지는 낙상 탭의
     상태 뱃지와 같은 알약 모양 스타일을 쓴다.
-  - 우측 결과(질환별 비율) 표시를 텍스트 나열 대신 표(QTableWidget)로 바꿔서
-    도넛 차트 색상과 맞춘 색상 칩을 같이 보여준다.
-  - 상단 카메라 영역/하단 결과 영역을 낙상 탭의 메시지 알림 패널과 같은
-    회색 섹션으로 나눴다.
+  - 우측 결과(질환별 비율)는 도넛(왼쪽, 고정 크기) + 범례 목록(오른쪽, 남는
+    폭을 다 채움) 구성으로 — 색 점 + 질환명 + 비율 한 줄씩, 도넛 차트 색상과
+    순서를 맞춘다.
+  - 상단 카메라 영역/하단 결과 영역, 좌측 사이드바의 "측정 카메라"/"환자 선택"도
+    낙상 탭의 메시지 알림 패널과 같은 회색 섹션으로 나눴다.
+  - 환자 선택 목록은 DB에서 가져온 결과가 카드처럼 쌓이는 느낌을 주려고
+    카드형 항목(이름 굵게 위 / 병실·ID 회색 아래)으로 바꾸고, 선택 시 파란
+    테두리로 강조된다(ui_kit.build_patient_card/style_selectable_list).
 """
 from . import db_client
 from .drawing import fit_to_view, to_pixmap
 from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
-    Qt, QAbstractItemView, QColor, QComboBox, QFont, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPainter, QPen, QPushButton,
-    QRectF, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    Qt, QColor, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QPainter, QPen, QPushButton, QRectF, QVBoxLayout, QWidget,
 )
-from .ui_kit import make_section_panel, style_pill_badge
+from .ui_kit import build_patient_card, make_section_panel, style_pill_badge, style_selectable_list
 
 # TODO(보행 데이터 연동 담당자): 실제 gait_analyzer.py의 cumulative_scores 키와
 # 맞는지 확인/수정 필요. 현재는 ai_server/models/의 model_*.pth 파일명에서 추론.
@@ -124,29 +127,34 @@ class GaitTab(QWidget):
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(16)
 
-        # 좌측: 측정 카메라 선택 + 환자 검색 + 목록 (스트레칭 탭과 동일한 사이드바 구성)
+        # 좌측: 측정 카메라 선택 + 환자 검색 + 목록을 각각 회색 섹션 패널로
+        # 나눠서 보여준다(스타일 개선 — 예전엔 배경 없이 라벨만 있어서 두
+        # 구역의 경계가 잘 안 보였다).
         left = QVBoxLayout()
-        left.setSpacing(8)
-        camera_title = QLabel("측정 카메라")
-        camera_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        left.addWidget(camera_title)
+        left.setSpacing(16)
+
+        camera_panel, camera_content, _ = make_section_panel("측정 카메라")
         self.camera_combo = QComboBox()
         # 역할이 'gait'인 카메라만 (settings.CAMERA_ROLES)
         self.camera_combo.addItems([c for c in CAMERA_PORTS if CAMERA_ROLES.get(c) == 'gait'])
-        left.addWidget(self.camera_combo)
+        camera_content.addWidget(self.camera_combo)
+        left.addWidget(camera_panel)
 
-        patient_title = QLabel("환자 선택")
-        patient_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        left.addWidget(patient_title)
+        patient_panel, patient_content, _ = make_section_panel("환자 선택")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("환자 검색")
         self.search_input.textChanged.connect(self._filter_patients)
-        left.addWidget(self.search_input)
+        patient_content.addWidget(self.search_input)
 
+        # DB에서 가져온 환자들이 메시지 알림 카드처럼 하나씩 쌓이는 느낌을
+        # 주기 위해, 각 항목을 카드형 위젯(이름 굵게 위 / 병실·ID 회색 아래)으로
+        # 만들어 끼워 넣고, 선택 시 파란 테두리로 강조되는 스타일을 준다.
         self.patient_list = QListWidget()
+        style_selectable_list(self.patient_list)
         self.patient_list.currentRowChanged.connect(self._on_select_patient)
-        left.addWidget(self.patient_list)
+        patient_content.addWidget(self.patient_list)
         self._populate_patient_list(self.patients)
+        left.addWidget(patient_panel, stretch=1)
 
         left_widget = QWidget()
         left_widget.setLayout(left)
@@ -186,13 +194,24 @@ class GaitTab(QWidget):
         self.empty_label.setStyleSheet("color:#888; padding:24px; border:none;")
         result_content.addWidget(self.empty_label)
 
+        self.result_title = QLabel("질환별 확률 평가")
+        self.result_title.setStyleSheet("font-size:14px; font-weight:700; color:#111827; border:none;")
+        self.result_title.hide()
+        result_content.addWidget(self.result_title)
+
+        # 도넛은 왼쪽에 적당한 크기로 고정해두고, 남는 가로 공간은 전부
+        # 범례(질환명 + 비율) 쪽으로 준다 — 예전엔 표(QTableWidget)를 고정
+        # 240px 폭으로 둬서 도넛은 가운데로, 표는 왼쪽에 붙어 보이는 비대칭이
+        # 있었다. 이제 도넛 자체가 왼쪽 기준점이 되고 범례가 나머지를 채운다.
         result_row = QHBoxLayout()
+        result_row.setSpacing(28)
         self.donut = DonutChartView()
+        self.donut.setFixedSize(190, 190)
         self.donut.hide()
         result_row.addWidget(self.donut)
-        self.legend_table = self._build_legend_table()
-        self.legend_table.hide()
-        result_row.addWidget(self.legend_table)
+        self.legend_widget, self.legend_pct_labels = self._build_legend()
+        self.legend_widget.hide()
+        result_row.addWidget(self.legend_widget, stretch=1)
         result_content.addLayout(result_row)
 
         actions = QHBoxLayout()
@@ -209,53 +228,54 @@ class GaitTab(QWidget):
         self.toggle_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
 
-    def _build_legend_table(self):
-        """질환별 비율을 표로 보여준다 — 색 칩 | 질환명 | 비율, 3열.
-        색은 도넛 차트(SERIES_COLORS_LIGHT)와 순서를 맞춰서 같은 항목이 같은
-        색으로 보이게 한다. 내용은 _render_legend()에서 매 결과마다 갱신한다."""
-        table = QTableWidget(len(DISEASE_ORDER), 3)
-        table.setFixedWidth(240)
-        table.horizontalHeader().hide()
-        table.verticalHeader().hide()
-        table.setShowGrid(False)
-        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setStyleSheet(
-            "QTableWidget { background:transparent; border:none; font-size:13px; color:#111827; }"
-        )
-        table.setColumnWidth(0, 16)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        table.setColumnWidth(2, 56)
+    def _build_legend(self):
+        """질환별 비율 범례 — 색 점 + 질환명 + 비율을 한 줄씩. 색은 도넛
+        차트(SERIES_COLORS_LIGHT)와 순서를 맞춰서 같은 항목이 같은 색으로
+        보이게 한다. (컨테이너 위젯, [비율 QLabel, ...]) 튜플을 반환하고,
+        비율 텍스트는 _render_legend()에서 매 결과마다 갱신한다."""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
-        for row, key in enumerate(DISEASE_ORDER):
-            table.setRowHeight(row, 28)
+        pct_labels = []
+        for i, key in enumerate(DISEASE_ORDER):
+            row = QHBoxLayout()
+            row.setSpacing(10)
 
-            swatch = QTableWidgetItem()
-            swatch.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            color = SERIES_COLORS_LIGHT[row % len(SERIES_COLORS_LIGHT)]
-            swatch.setBackground(QColor(color))
-            table.setItem(row, 0, swatch)
+            # 목업처럼 완전한 원이 아니라 모서리만 둥근 작은 사각형 칩 — 예전
+            # QTableWidget 색 칩(셀 전체를 채우는 큰 사각형)이 너무 커 보인다는
+            # 피드백에 따라 작고 각이 둥근 모양으로 바꿨다.
+            dot = QLabel()
+            dot.setFixedSize(12, 12)
+            color = SERIES_COLORS_LIGHT[i % len(SERIES_COLORS_LIGHT)]
+            dot.setStyleSheet(f"background:{color}; border-radius:3px;")
+            row.addWidget(dot)
 
-            name_item = QTableWidgetItem(DISEASE_LABEL.get(key, key))
-            name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            table.setItem(row, 1, name_item)
+            name = QLabel(DISEASE_LABEL.get(key, key))
+            name.setStyleSheet("font-size:13px; color:#374151; border:none;")
+            row.addWidget(name, stretch=1)
 
-            pct_item = QTableWidgetItem("0%")
-            pct_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            pct_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            table.setItem(row, 2, pct_item)
+            pct = QLabel("0%")
+            pct.setStyleSheet("font-size:13px; font-weight:600; color:#111827; border:none;")
+            pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(pct)
 
-        total_height = sum(table.rowHeight(r) for r in range(table.rowCount())) + 4
-        table.setFixedHeight(total_height)
-        return table
+            layout.addLayout(row)
+            pct_labels.append(pct)
+
+        layout.addStretch()
+        return container, pct_labels
 
     def _populate_patient_list(self, patients):
         self.patient_list.clear()
         for p in patients:
-            item = QListWidgetItem(p.name)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p)
+            card = build_patient_card(p)
+            item.setSizeHint(card.sizeHint())
             self.patient_list.addItem(item)
+            self.patient_list.setItemWidget(item, card)
 
     def _filter_patients(self, text):
         text = text.strip()
@@ -295,8 +315,9 @@ class GaitTab(QWidget):
 
     def _show_empty_state(self):
         self._set_status_badge("")
+        self.result_title.hide()
         self.donut.hide()
-        self.legend_table.hide()
+        self.legend_widget.hide()
         self.empty_label.show()
 
     def _toggle_analysis(self):
@@ -342,10 +363,11 @@ class GaitTab(QWidget):
         if not scores:
             return
         self.empty_label.hide()
+        self.result_title.show()
         self.donut.set_scores(scores)
         self.donut.show()
         self._render_legend(scores)
-        self.legend_table.show()
+        self.legend_widget.show()
         self.save_btn.setEnabled(True)
 
     def _render_legend(self, scores):
@@ -353,4 +375,4 @@ class GaitTab(QWidget):
         for row, key in enumerate(DISEASE_ORDER):
             value = max(0.0, scores.get(key, 0.0))
             pct = value / total * 100
-            self.legend_table.item(row, 2).setText(f"{pct:.0f}%")
+            self.legend_pct_labels[row].setText(f"{pct:.0f}%")
