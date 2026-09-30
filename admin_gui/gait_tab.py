@@ -18,14 +18,28 @@ handle_server_message()가 그 응답을 받으면 set_patients()를 호출해�
 antalgic/abnormal)은 ai_server/models/의 모델 파일명(model_*.pth)에서
 추론한 것으로, 실제 gait_analyzer.py 출력과 다를 수 있다. 보행 데이터
 연동 담당자가 실제 키 이름으로 DISEASE_ORDER를 맞춰줘야 한다.
+
+스타일 노트(개선 작업):
+  - 좌측 사이드바(측정 카메라/환자 선택) 여백·간격을 스트레칭 탭과 똑같이
+    맞췄다 — 예전엔 root/left 레이아웃에 여백을 안 줘서 탭을 오갈 때 사이드바
+    위치가 미묘하게 달라 보였다.
+  - 카메라 화면(VIEW_W/H)을 기존 640x480에서 50% 키웠다.
+  - 환자 이름/상태 뱃지를 화면 맨 위, 서로 붙여서 보여주고, 뱃지는 낙상 탭의
+    상태 뱃지와 같은 알약 모양 스타일을 쓴다.
+  - 우측 결과(질환별 비율) 표시를 텍스트 나열 대신 표(QTableWidget)로 바꿔서
+    도넛 차트 색상과 맞춘 색상 칩을 같이 보여준다.
+  - 상단 카메라 영역/하단 결과 영역을 낙상 탭의 메시지 알림 패널과 같은
+    회색 섹션으로 나눴다.
 """
 from . import db_client
 from .drawing import fit_to_view, to_pixmap
 from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
-    Qt, QColor, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPainter, QPen, QPushButton, QRectF, QVBoxLayout, QWidget,
+    Qt, QAbstractItemView, QColor, QComboBox, QFont, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPainter, QPen, QPushButton,
+    QRectF, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+from .ui_kit import make_section_panel, style_pill_badge
 
 # TODO(보행 데이터 연동 담당자): 실제 gait_analyzer.py의 cumulative_scores 키와
 # 맞는지 확인/수정 필요. 현재는 ai_server/models/의 model_*.pth 파일명에서 추론.
@@ -34,11 +48,15 @@ DISEASE_LABEL = {
     'normal': '정상', 'parkinsons': '파킨슨', 'stroke': '뇌졸중',
     'myopathic': '근병증', 'antalgic': '통증성 보행', 'abnormal': '기타 이상',
 }
-# 스트레칭 탭 영상만큼 카메라 화면이 작아 보인다는 피드백 — 기존 480x360에서 키움.
-VIEW_W, VIEW_H = 640, 480
+# 스트레칭 탭 영상만큼 카메라 화면이 작아 보인다는 피드백에 이어, 화면을 더
+# 키워달라는 요청으로 기존 640x480에서 50% 키웠다(960x480 → 960x720, 4:3 유지).
+VIEW_W, VIEW_H = 960, 720
 # dataviz 스킬 validate_palette.js로 light/dark 모두 통과 확인된 8색 팔레트 중 앞 6개
 SERIES_COLORS_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300']
 SERIES_COLORS_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300']
+
+# 분석 상태 뱃지 색 — "분석 중"은 낙상 탭의 "정상" 뱃지와 같은 초록으로 통일.
+STATUS_BADGE_BG = {'분석 중': '#2f9e44', '중지됨': '#9ca3af'}
 
 
 class DonutChartView(QWidget):
@@ -100,9 +118,14 @@ class GaitTab(QWidget):
         self.active_camera_id = None
 
         root = QHBoxLayout(self)
+        # 스트레칭 탭과 똑같은 바깥 여백/간격 — 예전엔 이 값이 없어서 탭을 오갈 때
+        # 사이드바 위치가 미묘하게 달라 보였다.
+        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(16)
 
         # 좌측: 측정 카메라 선택 + 환자 검색 + 목록 (스트레칭 탭과 동일한 사이드바 구성)
         left = QVBoxLayout()
+        left.setSpacing(8)
         camera_title = QLabel("측정 카메라")
         camera_title.setFont(QFont('', -1, QFont.Weight.Bold))
         left.addWidget(camera_title)
@@ -129,41 +152,47 @@ class GaitTab(QWidget):
         left_widget.setFixedWidth(250)
         root.addWidget(left_widget)
 
-        # 우측: 영상 + 상태 + 도넛차트/빈 상태 + 버튼
+        # 우측: 카메라 영역(회색 섹션) + 결과 영역(회색 섹션)
         right = QVBoxLayout()
+        right.setSpacing(16)
+
+        camera_panel, camera_content, _ = make_section_panel()
         header = QHBoxLayout()
         # 환자를 아직 안 골랐을 때 "환자를 선택하세요" 안내문을 따로 띄우지 않고
         # 그냥 비워둔다 — 왼쪽 목록 자체가 이미 선택하라는 UI이므로 중복.
         self.name_label = QLabel("")
         self.name_label.setFont(QFont('', -1, QFont.Weight.Bold))
         self.status_badge = QLabel("")
+        self.status_badge.hide()
         header.addWidget(self.name_label)
-        header.addStretch()
+        header.addSpacing(10)
         header.addWidget(self.status_badge)
-        right.addLayout(header)
+        header.addStretch()
+        camera_content.addLayout(header)
 
         self.video_label = QLabel()
         self.video_label.setFixedSize(VIEW_W, VIEW_H)
         self.video_label.setStyleSheet("background:#111; border-radius:6px;")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # video_label은 고정 크기라, 정렬을 안 주면 QVBoxLayout 기본값(왼쪽 정렬)대로
-        # 우측 칼럼 왼쪽에 붙어 보인다 — 가로 중앙 정렬로 칼럼 한가운데 오게 한다.
-        right.addWidget(self.video_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        # 패널 왼쪽에 붙어 보인다 — 가로 중앙 정렬로 패널 한가운데 오게 한다.
+        camera_content.addWidget(self.video_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        right.addWidget(camera_panel)
 
+        result_panel, result_content, _ = make_section_panel()
         self.empty_label = QLabel("보행 분석을 시작하면 결과가 표시됩니다")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color:#888; padding:24px;")
-        right.addWidget(self.empty_label)
+        self.empty_label.setStyleSheet("color:#888; padding:24px; border:none;")
+        result_content.addWidget(self.empty_label)
 
         result_row = QHBoxLayout()
         self.donut = DonutChartView()
         self.donut.hide()
         result_row.addWidget(self.donut)
-        self.legend_label = QLabel("")
-        self.legend_label.setWordWrap(True)
-        self.legend_label.hide()
-        result_row.addWidget(self.legend_label)
-        right.addLayout(result_row)
+        self.legend_table = self._build_legend_table()
+        self.legend_table.hide()
+        result_row.addWidget(self.legend_table)
+        result_content.addLayout(result_row)
 
         actions = QHBoxLayout()
         self.toggle_btn = QPushButton("보행 분석 시작")
@@ -172,11 +201,53 @@ class GaitTab(QWidget):
         self.save_btn.clicked.connect(self._save_session)
         actions.addWidget(self.toggle_btn)
         actions.addWidget(self.save_btn)
-        right.addLayout(actions)
+        result_content.addLayout(actions)
+        right.addWidget(result_panel)
 
         root.addLayout(right)
         self.toggle_btn.setEnabled(False)
         self.save_btn.setEnabled(False)
+
+    def _build_legend_table(self):
+        """질환별 비율을 표로 보여준다 — 색 칩 | 질환명 | 비율, 3열.
+        색은 도넛 차트(SERIES_COLORS_LIGHT)와 순서를 맞춰서 같은 항목이 같은
+        색으로 보이게 한다. 내용은 _render_legend()에서 매 결과마다 갱신한다."""
+        table = QTableWidget(len(DISEASE_ORDER), 3)
+        table.setFixedWidth(240)
+        table.horizontalHeader().hide()
+        table.verticalHeader().hide()
+        table.setShowGrid(False)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setStyleSheet(
+            "QTableWidget { background:transparent; border:none; font-size:13px; color:#111827; }"
+        )
+        table.setColumnWidth(0, 16)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.setColumnWidth(2, 56)
+
+        for row, key in enumerate(DISEASE_ORDER):
+            table.setRowHeight(row, 28)
+
+            swatch = QTableWidgetItem()
+            swatch.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            color = SERIES_COLORS_LIGHT[row % len(SERIES_COLORS_LIGHT)]
+            swatch.setBackground(QColor(color))
+            table.setItem(row, 0, swatch)
+
+            name_item = QTableWidgetItem(DISEASE_LABEL.get(key, key))
+            name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            table.setItem(row, 1, name_item)
+
+            pct_item = QTableWidgetItem("0%")
+            pct_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            pct_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(row, 2, pct_item)
+
+        total_height = sum(table.rowHeight(r) for r in range(table.rowCount())) + 4
+        table.setFixedHeight(total_height)
+        return table
 
     def _populate_patient_list(self, patients):
         self.patient_list.clear()
@@ -213,10 +284,18 @@ class GaitTab(QWidget):
         self.save_btn.setEnabled(False)
         self._show_empty_state()
 
+    def _set_status_badge(self, text):
+        if not text:
+            self.status_badge.hide()
+            return
+        self.status_badge.setText(text)
+        style_pill_badge(self.status_badge, STATUS_BADGE_BG.get(text, '#9ca3af'))
+        self.status_badge.show()
+
     def _show_empty_state(self):
-        self.status_badge.setText("")
+        self._set_status_badge("")
         self.donut.hide()
-        self.legend_label.hide()
+        self.legend_table.hide()
         self.empty_label.show()
 
     def _toggle_analysis(self):
@@ -228,11 +307,11 @@ class GaitTab(QWidget):
             # "측정 카메라"로 실제 분석을 시작한다.
             self.active_camera_id = self.camera_combo.currentText()
             self.toggle_btn.setText("분석 중지")
-            self.status_badge.setText("분석 중")
+            self._set_status_badge("분석 중")
             self.link.send({"cmd": "set_mode", "camera_id": self.active_camera_id, "mode": 1})
         else:
             self.toggle_btn.setText("보행 분석 시작")
-            self.status_badge.setText("중지됨")
+            self._set_status_badge("중지됨")
             # 마지막 결과는 화면에 남겨둠 (목업과 동일) — active_camera_id를
             # 그대로 둬서 show_frame이 계속 그 카메라의 프레임을 그린다.
 
@@ -265,14 +344,12 @@ class GaitTab(QWidget):
         self.donut.set_scores(scores)
         self.donut.show()
         self._render_legend(scores)
-        self.legend_label.show()
+        self.legend_table.show()
         self.save_btn.setEnabled(True)
 
     def _render_legend(self, scores):
         total = sum(max(0.0, v) for v in scores.values()) or 1.0
-        lines = []
-        for key in DISEASE_ORDER:
+        for row, key in enumerate(DISEASE_ORDER):
             value = max(0.0, scores.get(key, 0.0))
             pct = value / total * 100
-            lines.append(f"{DISEASE_LABEL.get(key, key)}: {pct:.0f}%")
-        self.legend_label.setText("\n".join(lines))
+            self.legend_table.item(row, 2).setText(f"{pct:.0f}%")

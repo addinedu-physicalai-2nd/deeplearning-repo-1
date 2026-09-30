@@ -10,8 +10,9 @@
 
 화면 구성(보행 탭과 통일):
   - 좌측: 환자(=카메라) 검색 + 선택 목록 (보행 탭과 동일하게 좌측 사이드바)
-  - 우측: 기준 동작 영상 + 실시간 카메라 영상을 크게 나란히 보여주고,
-    그 아래에 스트레칭 코스 선택 목록 + 시작 버튼을 둔다.
+  - 우측: 기준 동작 영상 + 실시간 카메라 영상 + 스트레칭 코스 선택을 각각
+    회색 섹션 패널로 나눠서 보여준다(스타일 개선 작업 — 예전엔 셋 다 배경이
+    없어서 어디까지가 한 덩어리인지 구분이 안 됐다).
 
 종합 판정(good/adjust/check 3단계) 패널은 따로 두지 않는다 — 실시간으로 우측
 영상 자체에 스켈레톤 색 + 작은 뱃지로 바로 찍어버리면 되므로 별도 패널은 불필요
@@ -43,6 +44,7 @@ from .qt_compat import (
     Qt, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
 )
+from .ui_kit import make_section_panel
 
 SKELETON_SUFFIX = '_skeleton.json'
 
@@ -191,53 +193,40 @@ class StretchingTab(QWidget):
         left_widget.setFixedWidth(250)
         root.addWidget(left_widget)
 
-        # 우측: 영상 두 개(크게) + 그 아래 스트레칭 코스 선택 + 시작 버튼
+        # 우측: "기준 동작" / "실시간 카메라" / "스트레칭 선택"을 각각 하나의
+        # 회색 섹션 패널로 나눠서 보여준다(요청하신 스타일 개선).
         right = QVBoxLayout()
-        # 영상 블록과 "코스 선택" 블록 사이에는 이 정도 여유를 두고, 블록 내부
-        # (라벨↔목록↔버튼) 간격은 course_section에서 훨씬 좁게 따로 준다 — 예전엔
-        # 이 spacing(12)이 라벨-목록 사이에도 그대로 적용돼서 "스트레칭 선택" 글자와
-        # 목록 사이가 필요 이상으로 넓어 보였다.
         right.setSpacing(16)
 
         views = QHBoxLayout()
         views.setSpacing(16)
 
-        ref_col = QVBoxLayout()
-        self.ref_title = QLabel("기준 동작")
-        self.ref_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        ref_col.addWidget(self.ref_title)
+        ref_panel, ref_content, self.ref_title = make_section_panel("기준 동작")
         self.ref_view = QLabel()
         self.ref_view.setFixedSize(VIEW_W, VIEW_H)
         self.ref_view.setStyleSheet("background:#0d0d10; border-radius:10px;")
         self.ref_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ref_col.addWidget(self.ref_view)
-        views.addLayout(ref_col)
+        ref_content.addWidget(self.ref_view)
+        views.addWidget(ref_panel)
 
-        my_col = QVBoxLayout()
         # 결과(코스 이름/평균 점수)는 세션 종료 후 우측 화면 자체(검정 결과 화면)에
         # 이미 크게 찍히므로, 제목 줄에 "완료 — OO 평균 N점" 같은 걸 또 띄우지 않고
         # 라벨은 항상 "실시간 카메라"로 고정한다.
-        self.my_title = QLabel("실시간 카메라")
-        self.my_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        my_col.addWidget(self.my_title)
+        my_panel, my_content, self.my_title = make_section_panel("실시간 카메라")
         self.my_view = QLabel()
         self.my_view.setFixedSize(VIEW_W, VIEW_H)
         self.my_view.setStyleSheet("background:#0d0d10; border-radius:10px;")
         self.my_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        my_col.addWidget(self.my_view)
-        views.addLayout(my_col)
+        my_content.addWidget(self.my_view)
+        views.addWidget(my_panel)
 
         right.addLayout(views)
 
-        # 라벨↔목록↔버튼을 촘촘하게 묶는 별도 레이아웃 — 위 right.setSpacing(16)과
-        # 분리해서 이 블록만 spacing(6)으로 좁혀야 "스트레칭 선택" 글자와 바로
-        # 아래 목록 사이 간격이 붙어 보인다.
-        course_section = QVBoxLayout()
-        course_section.setSpacing(6)
-
-        course_title = QLabel("스트레칭 선택")
-        course_title.setFont(QFont('', -1, QFont.Weight.Bold))
-        course_section.addWidget(course_title)
+        course_panel, course_content, _ = make_section_panel("스트레칭 선택")
+        # 라벨↔목록↔버튼을 촘촘하게 묶는다 — panel 자체의 title↔content 간격(10)과는
+        # 별도로 이 안쪽만 더 좁혀야 "스트레칭 선택" 글자와 바로 아래 목록 사이
+        # 간격이 붙어 보인다.
+        course_content.setSpacing(6)
         self.course_list = QListWidget()
         self.course_list.setMaximumHeight(150)
         if not self.courses:
@@ -248,13 +237,13 @@ class StretchingTab(QWidget):
             item = QListWidgetItem(course['label'])
             item.setData(Qt.ItemDataRole.UserRole, course['course_id'])
             self.course_list.addItem(item)
-        course_section.addWidget(self.course_list)
+        course_content.addWidget(self.course_list)
 
         self.start_btn = QPushButton("시작")
         self.start_btn.clicked.connect(self.start_video)
-        course_section.addWidget(self.start_btn)
+        course_content.addWidget(self.start_btn)
 
-        right.addLayout(course_section)
+        right.addWidget(course_panel)
 
         root.addLayout(right, stretch=1)
 

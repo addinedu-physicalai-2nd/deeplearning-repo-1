@@ -13,7 +13,19 @@ main_server 환자 목록(get_patients)의 camera_id로 채워서 보여주고, 
 화면은 응답을 기다리지 않고 로컬에서 낙관적으로 먼저 정상 상태로 되돌린다.
 낙상/주의 이벤트 자체는 main_server가 FallAnalyzer 결과를 받는 즉시 직접
 기록하므로(db_client.py 주석 참고), GUI가 따로 로그 기록 요청을 보내지 않는다
-— 카드 하단 "낙상 로그" 목록은 순수하게 화면에 보여주기 위한 로컬 UI 이력이다.
+— 하단 "낙상 로그" 패널은 순수하게 화면에 보여주기 위한 로컬 UI 이력이다.
+
+낙상 로그는 카메라 박스마다 따로 두지 않고, 탭 전체에서 하나만 공유한다
+(스타일 개선 작업 — 101호/102호 로그가 따로 있으면 어느 쪽이 최근인지
+한눈에 안 들어온다는 피드백에 따라 통합). 어느 병실 이벤트인지는 각 줄
+맨 앞의 "[101호]" 같은 표시로 구분한다.
+
+재알림(알림 중복) 방지: 같은 카메라에 이미 처리되지 않은 낙상 알림이 떠
+있는 동안에는 같은 카메라에서 또 낙상이 감지돼도 새 알림 카드를 띄우지
+않는다(self.active_camera_alerts). 요양보호사가 "처리 완료"를 눌러야만
+그 카메라의 알림이 다시 허용된다 — 한 명의 환자를 계속 추적 감지하면서
+매번 알림이 쌓여 피로해지는 문제를 막기 위함(사용자 확인 완료, 로직 변경
+승인됨).
 
 스타일 노트: 카드 헤더(방/이름 + 상태 뱃지) 줄에 고정 높이를 주지 않으면,
 그리드가 창 크기에 맞춰 카드를 세로로 늘릴 때 남는 공간이 헤더 레이아웃으로
@@ -26,10 +38,11 @@ from . import db_client
 from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
 from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
-    Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGraphicsDropShadowEffect,
-    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QVBoxLayout, QWidget, pyqtSignal,
+    Qt, QDialog, QFormLayout, QFont, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
+    pyqtSignal,
 )
+from .ui_kit import apply_card_shadow, make_section_panel, style_pill_badge
 
 # 침대 카메라 → 병실 표시명 (화면 표시용). 여기 없으면 camera_id를 그대로 표시
 FALL_ROOM_LABELS = {'CAM-01': '101호', 'CAM-02': '102호'}
@@ -42,6 +55,10 @@ FALL_CAMERAS = [(cam_id, FALL_ROOM_LABELS.get(cam_id, cam_id), '-')
 STATE_BORDER = {'normal': '#e5e7eb', 'checking': '#f59e0b', 'alert': '#ef4444'}
 STATE_BADGE_TEXT = {'normal': '정상', 'checking': '확인 필요', 'alert': '낙상 감지'}
 STATE_BADGE_BG = {'normal': '#2f9e44', 'checking': '#f59e0b', 'alert': '#ef4444'}
+
+# 하단 공용 낙상 로그에 남기는 최근 항목 수 — 카메라 2대 몫을 한 목록에 같이
+# 쌓으므로 예전(카메라별 20개)보다 넉넉하게 잡는다.
+LOG_MAX_ITEMS = 30
 
 
 class FallCameraBox(QWidget):
@@ -72,8 +89,6 @@ class FallCameraBox(QWidget):
         name_label.setStyleSheet("font-size:15px; font-weight:600; color:#111827; border:none;")
 
         self.badge = QLabel(STATE_BADGE_TEXT['normal'])
-        self.badge.setFixedHeight(24)
-        self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         header.addWidget(name_label)
         header.addStretch()
@@ -94,35 +109,13 @@ class FallCameraBox(QWidget):
         self.status_label.setFixedHeight(18)
         layout.addWidget(self.status_label)
 
-        # 낙상 관련 로그 — 이 카메라(=침대)에서 발생한 이벤트를 최신순으로 쌓아서
-        # 보여주는 섹션. 영상/상태 뱃지와 별도로 눈에 보이는 이력을 남겨달라는
-        # 요청에 따라 카드를 세 번째 섹션으로 나눴다.
-        log_title = QLabel("낙상 로그")
-        log_title.setStyleSheet("font-size:12px; font-weight:600; color:#6b7280; border:none;")
-        layout.addWidget(log_title)
-
-        self.log_list = QListWidget()
-        self.log_list.setFixedHeight(110)
-        self.log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.log_list.setStyleSheet(
-            "QListWidget { font-size:11px; color:#374151; border:1px solid #e5e7eb; "
-            "border-radius:8px; background:#fafafa; } "
-            "QListWidget::item { padding:3px 6px; border:none; }"
-        )
-        layout.addWidget(self.log_list)
-
-        # 카드가 그리드 행 높이에 맞춰 세로로 늘어나도 남는 공간이 로그 목록으로
-        # 새어 들어가 크기가 들쑥날쑥해지지 않도록, 여기서 여유 공간을 흡수한다.
+        # 낙상 로그는 이제 카드마다 따로 두지 않고 탭 하단의 공용 패널 하나로 합쳤다
+        # (FallTab._add_log_entry 참고) — 카드는 영상 + 상태만 담당한다.
         layout.addStretch()
 
         self._apply_badge_style('normal')
         self._apply_border()
-
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 40))
-        shadow.setOffset(0, 4)
-        self.setGraphicsEffect(shadow)
+        apply_card_shadow(self)
 
     def _apply_border(self):
         color = STATE_BORDER[self.state]
@@ -132,10 +125,7 @@ class FallCameraBox(QWidget):
         )
 
     def _apply_badge_style(self, state):
-        self.badge.setStyleSheet(
-            f"background:{STATE_BADGE_BG[state]}; color:#ffffff; border:none; "
-            f"border-radius:12px; padding:0 12px; font-size:12px; font-weight:600;"
-        )
+        style_pill_badge(self.badge, STATE_BADGE_BG[state])
 
     def set_state(self, state, status_text=None):
         if state not in STATE_BORDER:
@@ -151,14 +141,6 @@ class FallCameraBox(QWidget):
         view = fit_to_view(frame_bgr, 480, 360)
         draw_camera_overlay(view, self.camera_id, self.room_label)
         self.video_label.setPixmap(to_pixmap(view))
-
-    def add_log_entry(self, text):
-        """낙상 로그에 최신 이벤트를 맨 위에 쌓는다. 너무 길어지지 않게 최근
-        20개까지만 유지한다."""
-        timestamp = time.strftime('%H:%M:%S')
-        self.log_list.insertItem(0, QListWidgetItem(f"{timestamp}  {text}"))
-        while self.log_list.count() > 20:
-            self.log_list.takeItem(self.log_list.count() - 1)
 
 
 class AlertCard(QFrame):
@@ -233,49 +215,54 @@ class FallTab(QWidget):
         self.link = link
         self.boxes = {}
         self.cards = {}          # track_id -> AlertCard (urgent 카드만 추적, 처리 완료 시 제거)
+        # 이미 처리되지 않은 낙상 알림이 떠 있는 카메라 id 집합 — 여기 들어있는
+        # 카메라는 "처리 완료"가 눌리기 전까지 새 낙상 알림을 다시 띄우지 않는다.
+        self.active_camera_alerts = set()
         self._camera_lookup = {cam_id: (room, patient) for cam_id, room, patient in FALL_CAMERAS}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 20, 24, 20)
-        outer.setSpacing(12)
+        outer.setSpacing(16)
 
         content = QHBoxLayout()
         content.setSpacing(16)
 
         grid_widget = QWidget()
-        grid = QGridLayout(grid_widget)
-        grid.setSpacing(16)
-        for i, (camera_id, room_label, patient_name) in enumerate(FALL_CAMERAS):
-            box = FallCameraBox(camera_id, room_label, patient_name)
-            self.boxes[camera_id] = box
-            grid.addWidget(box, i // 2, i % 2)
-        content.addWidget(grid_widget, stretch=3)
+        self._build_grid(grid_widget)
 
         # 우측 알림 목록 — 낙상 팝업과는 별개의 "패널"임을 한눈에 알 수 있게
         # 회색 배경 + "메시지 알림" 제목을 얹은 하나의 섹션으로 감싼다.
-        notif_panel = QWidget()
-        notif_panel.setObjectName("notifPanel")
-        notif_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        notif_panel.setStyleSheet(
-            "#notifPanel { background:#f3f4f6; border-radius:14px; }"
-        )
-        notif_panel_layout = QVBoxLayout(notif_panel)
-        notif_panel_layout.setContentsMargins(16, 14, 16, 14)
-        notif_panel_layout.setSpacing(10)
-
-        notif_title = QLabel("메시지 알림")
-        notif_title.setStyleSheet("font-size:14px; font-weight:700; color:#111827; border:none;")
-        notif_panel_layout.addWidget(notif_title)
+        notif_panel, notif_content, _ = make_section_panel("메시지 알림")
+        notif_panel.setFixedWidth(280)
 
         self.notif_stack = QVBoxLayout()
         self.notif_stack.setSpacing(10)
         self.notif_stack.addStretch()
-        notif_panel_layout.addLayout(self.notif_stack)
+        notif_content.addLayout(self.notif_stack)
 
-        notif_panel.setFixedWidth(280)
+        # 카메라 박스와 메시지 알림 패널의 높이가 서로 달라도(알림 개수에 따라
+        # 패널 높이가 들쭉날쭉해질 수 있음) 둘 다 위쪽 기준으로 나란히 맞춘다 —
+        # 기본값(늘려 채우기)으로 두면 한쪽이 짧을 때 위치가 미묘하게 어긋나 보인다.
+        content.addWidget(grid_widget, stretch=3)
         content.addWidget(notif_panel, stretch=1)
+        content.setAlignment(grid_widget, Qt.AlignmentFlag.AlignTop)
+        content.setAlignment(notif_panel, Qt.AlignmentFlag.AlignTop)
 
         outer.addLayout(content)
+
+        # 낙상 로그 — 카메라별로 따로 있던 것을 탭 전체에서 공유하는 패널 하나로
+        # 통합했다(각 줄 앞에 "[101호]" 식으로 병실을 표시해서 구분).
+        log_panel, log_content, _ = make_section_panel("낙상 로그")
+        self.log_list = QListWidget()
+        self.log_list.setFixedHeight(110)
+        self.log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.log_list.setStyleSheet(
+            "QListWidget { border:1px solid #e5e7eb; border-radius:8px; "
+            "background:#ffffff; font-size:12px; color:#374151; } "
+            "QListWidget::item { padding:4px 8px; border:none; }"
+        )
+        log_content.addWidget(self.log_list)
+        outer.addWidget(log_panel)
 
     def set_patients(self, patients):
         """main_server에서 환자 목록이 도착하면 app.py가 호출 — Patient.camera_id(낙상 카메라 배정)로 환자명 갱신"""
@@ -284,6 +271,14 @@ class FallTab(QWidget):
                 room_label, _ = self._camera_lookup[p.camera_id]
                 self._camera_lookup[p.camera_id] = (room_label, p.name)
                 self.boxes[p.camera_id].patient_name = p.name
+
+    def _build_grid(self, grid_widget):
+        grid = QGridLayout(grid_widget)
+        grid.setSpacing(16)
+        for i, (camera_id, room_label, patient_name) in enumerate(FALL_CAMERAS):
+            box = FallCameraBox(camera_id, room_label, patient_name)
+            self.boxes[camera_id] = box
+            grid.addWidget(box, i // 2, i % 2)
 
     def render(self, camera_id, msg, frame):
         """result_receiver가 mode 0 메시지를 줄 때마다 admin_gui.py의 dispatch()가 호출"""
@@ -310,13 +305,26 @@ class FallTab(QWidget):
             # 낙상/주의 이벤트 자체는 main_server가 이미 직접 기록하므로 여기서
             # DB에 따로 요청을 보내지 않는다 — add_log_entry는 화면용 로컬 이력.
             if name.endswith('TO_ALERT'):
-                box.add_log_entry("낙상 감지")
-                self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=True,
-                                      message="낙상이 감지되었습니다. 확인 후 처리해주세요.")
+                self._add_log_entry(room_label, "낙상 감지")
+                # 이 카메라에 이미 처리되지 않은 낙상 알림이 떠 있으면 또 띄우지
+                # 않는다 — 같은 사람을 계속 추적 감지해도 "처리 완료" 전까지는
+                # 알림이 한 번만 뜬다(사용자 확인된 동작).
+                if camera_id not in self.active_camera_alerts:
+                    self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=True,
+                                          message="낙상이 감지되었습니다. 확인 후 처리해주세요.")
+                    self.active_camera_alerts.add(camera_id)
             elif name.endswith('TO_CHECKING'):
-                box.add_log_entry("자세 확인 필요")
+                self._add_log_entry(room_label, "자세 확인 필요")
                 self._add_alert_card(camera_id, room_label, patient_name, track_id, urgent=False,
                                       message="자세 확인이 필요합니다.")
+
+    def _add_log_entry(self, room_label, text):
+        """낙상 로그 패널에 최신 이벤트를 맨 위에 쌓는다. 너무 길어지지 않게
+        최근 LOG_MAX_ITEMS개까지만 유지한다."""
+        timestamp = time.strftime('%H:%M:%S')
+        self.log_list.insertItem(0, QListWidgetItem(f"{timestamp}  [{room_label}] {text}"))
+        while self.log_list.count() > LOG_MAX_ITEMS:
+            self.log_list.takeItem(self.log_list.count() - 1)
 
     def _add_alert_card(self, camera_id, room_label, patient_name, track_id, urgent, message):
         # 알림 카드 제목도 카드 헤더와 통일 — 환자명 없이 병실 번호만 (침대별
@@ -342,6 +350,8 @@ class FallTab(QWidget):
             box = self.boxes.get(camera_id)
             if box is not None:
                 box.set_state('normal')   # 서버 응답 전까지 화면상 낙관적 처리
-                box.add_log_entry(f"{caregiver_name}님이 처리 완료")
+            self._add_log_entry(room_label, f"{caregiver_name}님이 처리 완료")
             card.remove()
             self.cards.pop(track_id, None)
+            # 처리 완료가 끝났으니 이 카메라는 다시 낙상 알림을 받을 수 있다.
+            self.active_camera_alerts.discard(camera_id)

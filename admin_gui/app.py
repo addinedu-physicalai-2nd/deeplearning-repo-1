@@ -15,6 +15,7 @@ network.py / drawing.py로 그대로 옮겼고, 이 파일은 그것들을 조�
 """
 import argparse
 import json
+import os
 import queue
 import threading
 import time
@@ -27,12 +28,31 @@ from .drawing import draw_fall, draw_gait
 from .fall_tab import FallTab
 from .gait_tab import GaitTab
 from .network import FrameStore, MainLink, result_receiver, video_receiver
-from .qt_compat import (Qt, QApplication, QFont, QHBoxLayout, QLabel, QMainWindow,
-                        QTabWidget, QTimer, QVBoxLayout, QWidget)
+from .qt_compat import (Qt, QApplication, QFont, QFontDatabase, QHBoxLayout, QLabel,
+                        QMainWindow, QTabWidget, QTimer, QVBoxLayout, QWidget)
 from .stretch_tab import StretchingTab
 
 UPDATE_INTERVAL_MS = 30
 FPS_LOG_SEC = 5.0   # 스트레칭 수신/표시 프레임 수 로그 주기
+
+# 번들 폰트(Pretendard) — 시스템에 안 깔려 있어도 항상 같은 폰트로 보이도록
+# admin_gui/assets/fonts/에 직접 넣어두고 앱 시작 시 등록한다. STYLE_SHEET의
+# QWidget font-family 첫 순번이 이 폰트다 (스타일 개선 작업).
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'fonts')
+FONT_FILES = [
+    'Pretendard-Regular.otf', 'Pretendard-Medium.otf',
+    'Pretendard-SemiBold.otf', 'Pretendard-Bold.otf',
+]
+
+
+def load_app_fonts():
+    """Pretendard 폰트 파일들을 QFontDatabase에 등록한다. 파일이 아직 없으면
+    (예: assets/fonts/를 아직 못 받은 개발 환경) 조용히 건너뛰고 시스템 기본
+    폰트로 돌아간다 — 폰트 하나 때문에 앱 전체가 안 뜨면 안 되므로."""
+    for filename in FONT_FILES:
+        path = os.path.join(FONT_DIR, filename)
+        if os.path.exists(path):
+            QFontDatabase.addApplicationFont(path)
 
 # 목업(gui_mockup_v5.html)과 맞춘 전역 스타일 — 탭 밑줄 강조, 카드 톤 배경 등.
 # 참고: OS가 그리는 실제 창 타이틀바(맨 위 제목줄)는 여기서 손댈 수 없다 —
@@ -48,7 +68,7 @@ QMainWindow, #rootContainer {
     background: #f7f8fa;
 }
 QWidget {
-    font-family: "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+    font-family: "Pretendard", "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
     font-size: 13px;
     color: #111827;
 }
@@ -309,6 +329,7 @@ def main():
     args = parser.parse_args()
 
     app = QApplication([])
+    load_app_fonts()
     app.setStyleSheet(STYLE_SHEET)
     window = AdminWindow(stretch_dir=args.stretch_dir)
     window.resize(1600, 900)   # 스트레칭 탭 영상이 커져서 창도 키운다

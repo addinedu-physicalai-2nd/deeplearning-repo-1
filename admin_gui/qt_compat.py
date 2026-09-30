@@ -7,29 +7,32 @@ os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
 
 try:
     from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
-    from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
-    from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QFormLayout,
-                                 QFrame, QGraphicsDropShadowEffect, QGridLayout,
-                                 QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                                 QListWidgetItem, QMainWindow, QMessageBox,
-                                 QPushButton, QTabWidget, QVBoxLayout, QWidget)
+    from PyQt6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter, QPen, QPixmap
+    from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog,
+                                 QFormLayout, QFrame, QGraphicsDropShadowEffect, QGridLayout,
+                                 QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+                                 QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                                 QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+                                 QWidget)
     PYQT_VERSION = 6
 except ImportError:
     from PyQt5.QtCore import Qt, QTimer, QRectF, pyqtSignal
-    from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
-    from PyQt5.QtWidgets import (QApplication, QComboBox, QDialog, QFormLayout,
-                                 QFrame, QGraphicsDropShadowEffect, QGridLayout,
-                                 QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                                 QListWidgetItem, QMainWindow, QMessageBox,
-                                 QPushButton, QTabWidget, QVBoxLayout, QWidget)
+    from PyQt5.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter, QPen, QPixmap
+    from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog,
+                                 QFormLayout, QFrame, QGraphicsDropShadowEffect, QGridLayout,
+                                 QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+                                 QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                                 QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+                                 QWidget)
     PYQT_VERSION = 5
 
 __all__ = [
     'Qt', 'QTimer', 'QRectF', 'pyqtSignal',
-    'QColor', 'QFont', 'QImage', 'QPainter', 'QPen', 'QPixmap',
-    'QApplication', 'QComboBox', 'QDialog', 'QFormLayout', 'QFrame',
-    'QGraphicsDropShadowEffect', 'QGridLayout', 'QHBoxLayout', 'QLabel',
+    'QColor', 'QFont', 'QFontDatabase', 'QImage', 'QPainter', 'QPen', 'QPixmap',
+    'QAbstractItemView', 'QApplication', 'QComboBox', 'QDialog', 'QFormLayout', 'QFrame',
+    'QGraphicsDropShadowEffect', 'QGridLayout', 'QHBoxLayout', 'QHeaderView', 'QLabel',
     'QLineEdit', 'QListWidget', 'QListWidgetItem', 'QMainWindow',
-    'QMessageBox', 'QPushButton', 'QTabWidget', 'QVBoxLayout', 'QWidget',
+    'QMessageBox', 'QPushButton', 'QTableWidget', 'QTableWidgetItem', 'QTabWidget',
+    'QVBoxLayout', 'QWidget',
     'PYQT_VERSION',
 ]
