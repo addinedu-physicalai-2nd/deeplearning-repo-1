@@ -8,15 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import List, Dict, Any
 from config.settings import MODEL_DIR
-
-# ==========================================
-# 0. 데이터 입출력 구조체 정의
-# ==========================================
-@dataclass
-class RawDetection:
-    track_id: int
-    bbox: List[float]
-    raw_data: Dict[str, Any]
+from .data_models import RawDetection
 
 # ==========================================
 # 1. LSTM 딥러닝 모델 아키텍처
