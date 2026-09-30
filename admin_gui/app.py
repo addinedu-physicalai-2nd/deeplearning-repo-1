@@ -1,5 +1,5 @@
 # admin_gui/app.py
-"""GUI 엔트리포인트 — 낙상/보행/스트레칭 3탭 구조 (목업 gui_mockup_v5.html 기준).
+"""GUI 엔트리포인트 — 낙상/보행/스트레칭/환자 관리 4탭 구조 (목업 gui_mockup_v5.html 기준).
 
 기존 admin_gui.py 초안(형의 테스트용 코드, 모니터링+스트레칭 2탭 구조)과
 달리, 실제로 쓸 구조인 3탭으로 재구성했다. 네트워크/그리기 로직은
@@ -28,6 +28,7 @@ from .drawing import draw_fall, draw_gait
 from .fall_tab import FallTab, FallToast
 from .gait_tab import GaitTab
 from .network import FrameStore, MainLink, result_receiver, video_receiver
+from .patient_tab import PatientTab
 from .qt_compat import (Qt, QApplication, QColor, QFont, QFontDatabase, QHBoxLayout, QIcon,
                         QLabel, QMainWindow, QPainter, QPixmap, QTabWidget, QTimer,
                         QVBoxLayout, QWidget)
@@ -170,6 +171,7 @@ class AdminWindow(QMainWindow):
         self.fall_tab = FallTab(self.link)
         self.gait_tab = GaitTab(self.link)
         self.stretch_tab = StretchingTab(self.link, stretch_dir)
+        self.patient_tab = PatientTab(self.link)
 
         # keypoints_px, overall.level, cumulative_scores 같은 필드명은 아직 실제
         # 서버 출력으로 확인 못 한 추측값이라, mode별로 딱 한 번씩만 원본 메시지를
@@ -185,6 +187,7 @@ class AdminWindow(QMainWindow):
         self.tabs.addTab(self.fall_tab, "낙상")
         self.tabs.addTab(self.gait_tab, "보행")
         self.tabs.addTab(self.stretch_tab, "스트레칭")
+        self.tabs.addTab(self.patient_tab, "환자 관리")
 
         # 낙상 알림: 처음엔 새 낙상이 감지되면 무조건 낙상 탭으로 화면을 강제
         # 전환했는데, 보행/스트레칭 탭에서 작업 중일 때 화면이 갑자기 바뀌는
@@ -311,13 +314,18 @@ class AdminWindow(QMainWindow):
             cmd = msg.get('cmd')
             if not msg.get('ok'):
                 print(f"[GUI] 요청 실패: {cmd} (req_id={msg.get('req_id')})")
+                if cmd == 'get_patient_detail':
+                    self.patient_tab.on_detail_failed()
                 return
             if cmd == 'get_patients':
                 patients = db_client.to_patients(msg.get('data') or [])
                 self.fall_tab.set_patients(patients)
                 self.gait_tab.set_patients(patients)
                 self.stretch_tab.set_patients(patients)
+                self.patient_tab.set_patients(patients)
                 print(f"[GUI] 환자 {len(patients)}명 로드")
+            elif cmd == 'get_patient_detail':
+                self.patient_tab.on_detail(msg.get('data'))
         elif kind == 'stretch_session_end':
             self.stretch_tab.on_session_end(msg)
 
@@ -361,6 +369,10 @@ class AdminWindow(QMainWindow):
         안전하다."""
         if self.tabs.currentWidget() is not self.gait_tab:
             self.gait_tab.reset_analysis()
+        # 환자 관리 탭으로 올 때마다 보고 있던 환자 상세를 다시 받아온다 — 다른 탭에서
+        # 보행/스트레칭 결과를 저장했거나 낙상이 기록됐으면 바로 반영되게.
+        if self.tabs.currentWidget() is self.patient_tab:
+            self.patient_tab.reload_detail()
 
     def _show_fall_toast(self, room_label, message):
         """낙상 감지 시 화면 우상단에 토스트를 띄운다(FallTab.fall_detected).

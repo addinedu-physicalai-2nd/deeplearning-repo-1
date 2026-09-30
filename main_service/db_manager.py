@@ -7,10 +7,28 @@ DB가 꺼져 있어도 모니터링(영상/분석)은 계속 돌아가야 하기
 """
 import logging
 import threading
+from datetime import date, datetime
+from decimal import Decimal
 
 from config.settings import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, CAMERA_PATIENTS
 
 GAIT_COLUMNS = ['normal', 'abnormal', 'parkinsons', 'stroke', 'myopathic', 'antalgic']
+DETAIL_LOG_LIMIT = 20       # 환자 상세 조회 시 기록 종류별 최근 건수
+
+
+def _plain_row(row):
+    """DB 값 → JSON으로 GUI에 보낼 수 있는 기본 타입 (datetime/date → 문자열, Decimal → float)"""
+    out = {}
+    for key, value in row.items():
+        if isinstance(value, datetime):
+            out[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+        elif isinstance(value, date):
+            out[key] = value.isoformat()
+        elif isinstance(value, Decimal):
+            out[key] = float(value)
+        else:
+            out[key] = value
+    return out
 
 
 class DBManager:
@@ -104,6 +122,56 @@ class DBManager:
             return self._patient_row(row) if row else None
         except Exception as e:
             self.logger.error(f"get_patient_by_camera({camera_id}) failed: {e}")
+            return None
+
+    def get_patient_detail(self, patient_id):
+        """환자 관리 탭용 상세 조회: 기본 정보 + 낙상/보행/스트레칭 최근 기록.
+        {'patient': {...}, 'fall_logs': [...], 'gait_logs': [...], 'stretch_logs': [...]}
+        없는 환자/조회 실패 시 None"""
+        if not self.enabled:
+            return None
+        try:
+            pid = int(patient_id)
+            row = self._execute("""
+                SELECT id, name, gender, birth_date, age, admit_date, room_number, care_grade,
+                       guardian_name, guardian_phone, caregiver_name, notes
+                  FROM patients
+                 WHERE id = %s
+            """, (pid,), fetch='one')
+            if row is None:
+                return None
+            patient = _plain_row(row)
+            patient['camera_id'] = self.camera_by_patient.get(pid)
+
+            fall_logs = self._execute("""
+                SELECT log_id, camera_id, checking_at, alert_at, status, resolved_at
+                  FROM fall_logs
+                 WHERE patient_id = %s
+                 ORDER BY COALESCE(alert_at, checking_at) DESC
+                 LIMIT %s
+            """, (pid, DETAIL_LOG_LIMIT), fetch='all')
+            gait_logs = self._execute("""
+                SELECT log_id, camera_id, checking_at, """ + ", ".join(GAIT_COLUMNS) + """
+                  FROM gait_logs
+                 WHERE patient_id = %s
+                 ORDER BY checking_at DESC
+                 LIMIT %s
+            """, (pid, DETAIL_LOG_LIMIT), fetch='all')
+            stretch_logs = self._execute("""
+                SELECT log_id, camera_id, checking_at, straching_id, accuracy_id
+                  FROM stretch_logs
+                 WHERE patient_id = %s
+                 ORDER BY checking_at DESC
+                 LIMIT %s
+            """, (pid, DETAIL_LOG_LIMIT), fetch='all')
+            return {
+                'patient': patient,
+                'fall_logs': [_plain_row(r) for r in fall_logs],
+                'gait_logs': [_plain_row(r) for r in gait_logs],
+                'stretch_logs': [_plain_row(r) for r in stretch_logs],
+            }
+        except Exception as e:
+            self.logger.error(f"get_patient_detail({patient_id}) failed: {e}")
             return None
 
     # ============ 낙상 ============

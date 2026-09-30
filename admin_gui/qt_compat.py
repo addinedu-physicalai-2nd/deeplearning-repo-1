@@ -12,7 +12,7 @@ try:
                                  QFormLayout, QFrame, QGraphicsDropShadowEffect, QGridLayout,
                                  QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                  QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-                                 QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+                                 QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                  QWidget)
     PYQT_VERSION = 6
 except ImportError:
@@ -22,7 +22,7 @@ except ImportError:
                                  QFormLayout, QFrame, QGraphicsDropShadowEffect, QGridLayout,
                                  QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
                                  QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-                                 QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+                                 QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                  QWidget)
     PYQT_VERSION = 5
 
@@ -32,7 +32,7 @@ __all__ = [
     'QAbstractItemView', 'QApplication', 'QComboBox', 'QDialog', 'QFormLayout', 'QFrame',
     'QGraphicsDropShadowEffect', 'QGridLayout', 'QHBoxLayout', 'QHeaderView', 'QLabel',
     'QLineEdit', 'QListWidget', 'QListWidgetItem', 'QMainWindow',
-    'QMessageBox', 'QPushButton', 'QTableWidget', 'QTableWidgetItem', 'QTabWidget',
+    'QMessageBox', 'QPushButton', 'QScrollArea', 'QTableWidget', 'QTableWidgetItem', 'QTabWidget',
     'QVBoxLayout', 'QWidget',
     'PYQT_VERSION',
 ]

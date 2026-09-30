@@ -49,6 +49,11 @@ def request_patients():
     return request('get_patients')
 
 
+def request_patient_detail(patient_id):
+    """환자 상세(기본 정보 + 낙상/보행/스트레칭 기록) 요청 → 응답은 app.py가 환자 관리 탭에 넘김"""
+    return request('get_patient_detail', patient_id=patient_id)
+
+
 def to_patients(rows):
     """get_patients 응답(dict 리스트) → Patient 리스트"""
     return [

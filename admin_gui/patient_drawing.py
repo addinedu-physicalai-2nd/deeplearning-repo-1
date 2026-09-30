@@ -1,23 +1,17 @@
 # admin_gui/patient_drawing.py
-"""환자 관리 탭 전용 그리기 헬퍼 (테스트용 — drawing.py 작업이 끝나면 합칠 예정).
+"""환자 관리 탭 전용 그리기 헬퍼 — 정보 그리드, 요약 카드, 기록 표, 보행 분포 막대.
 
-drawing.py는 카메라 프레임(OpenCV) 위에 그리는 함수들이라, 여기 있는 Qt 위젯용
-헬퍼(정보 그리드, 요약 카드, 기록 표, 보행 분포 막대)와 성격이 조금 다르다.
-합칠 때 drawing.py에 그대로 옮기거나 ui_kit.py 쪽으로 옮기면 된다.
-로직은 없고, 받은 dict를 화면에 그리기만 한다.
+drawing.py는 카메라 프레임(OpenCV) 위에 그리는 함수들이고, 여기는 Qt 위젯을
+만드는 헬퍼라 파일을 나눠 둔다. 공통 스타일(섹션 패널/알약 뱃지/그림자)은
+ui_kit.py 것을 그대로 쓴다. 로직은 없고, main_server가 보낸 get_patient_detail
+응답(dict)을 화면에 그리기만 한다.
 """
 from .gait_tab import DISEASE_LABEL, DISEASE_ORDER, SERIES_COLORS_LIGHT
 from .qt_compat import (
-    PYQT_VERSION, Qt, QAbstractItemView, QColor, QFont, QGridLayout, QHBoxLayout,
-    QHeaderView, QLabel, QPainter, QRectF, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    Qt, QAbstractItemView, QColor, QFont, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+    QPainter, QRectF, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 from .ui_kit import apply_card_shadow, style_pill_badge
-
-# qt_compat에 아직 없는 위젯 — 합칠 때 qt_compat.py로 옮기면 이 블록은 지워도 됨
-if PYQT_VERSION == 6:
-    from PyQt6.QtWidgets import QScrollArea
-else:
-    from PyQt5.QtWidgets import QScrollArea
 
 # stretch_logs.straching_id → 운동 이름 (db.sql 주석 기준: 1:목, 2:어깨, 3:허리, 4:무릎)
 STRETCH_NAMES = {1: '목', 2: '어깨', 3: '허리', 4: '무릎'}
@@ -32,8 +26,8 @@ INFO_FIELDS = [
     ('gender', '성별'), ('birth_date', '생년월일'),
     ('age', '나이'), ('admit_date', '입소일'),
     ('room_number', '병실'), ('care_grade', '장기요양등급'),
-    ('caregiver_name', '담당 요양보호사'), ('camera_id', '낙상 카메라'),
     ('guardian_name', '보호자'), ('guardian_phone', '보호자 연락처'),
+    ('caregiver_name', '담당 요양보호사'),
 ]
 
 
@@ -53,8 +47,6 @@ def fmt_info(key, value):
         return GENDER_LABEL.get(value, str(value))
     if key == 'age':
         return f"{value}세"
-    if key == 'camera_id':
-        return str(value)
     return str(value)
 
 
@@ -250,7 +242,7 @@ def _pill_cell(text, color):
 
 
 def draw_fall_table(table, fall_logs):
-    """낙상 기록: 주의 시각 | 낙상 확정 | 상태(뱃지) | 처리 시각 | 카메라"""
+    """낙상 기록: 주의 시각 | 낙상 확정 | 상태(뱃지) | 처리 시각"""
     table.setRowCount(len(fall_logs))
     for row, log in enumerate(fall_logs):
         table.setRowHeight(row, 32)
@@ -259,11 +251,10 @@ def draw_fall_table(table, fall_logs):
         status = log.get('status') or '-'
         table.setCellWidget(row, 2, _pill_cell(status, FALL_STATUS_BG.get(status, '#9ca3af')))
         table.setItem(row, 3, _cell(fmt_dt(log.get('resolved_at'))))
-        table.setItem(row, 4, _cell(log.get('camera_id') or '-'))
 
 
 def draw_gait_table(table, gait_logs):
-    """보행 기록: 측정 시각 | 정상 | 최다 이상 유형 | 카메라"""
+    """보행 기록: 측정 시각 | 정상 | 최다 이상 유형"""
     table.setRowCount(len(gait_logs))
     for row, log in enumerate(gait_logs):
         table.setRowHeight(row, 30)
@@ -273,11 +264,10 @@ def draw_gait_table(table, gait_logs):
         table.setItem(row, 1, _cell(f"{float(log.get('normal') or 0):.0f}%", align_right=True))
         table.setItem(row, 2, _cell(f"{DISEASE_LABEL.get(top_key, top_key)} "
                                     f"{float(log.get(top_key) or 0):.0f}%"))
-        table.setItem(row, 3, _cell(log.get('camera_id') or '-'))
 
 
 def draw_stretch_table(table, stretch_logs):
-    """스트레칭 기록: 측정 시각 | 운동 | 정확도(색) | 카메라"""
+    """스트레칭 기록: 측정 시각 | 운동 | 정확도(색)"""
     table.setRowCount(len(stretch_logs))
     for row, log in enumerate(stretch_logs):
         table.setRowHeight(row, 30)
@@ -288,7 +278,6 @@ def draw_stretch_table(table, stretch_logs):
         score_item = _cell(f"{score:.1f}점", align_right=True)
         score_item.setForeground(QColor('#2f9e44' if score >= 70 else '#f59e0b' if score >= 50 else '#ef4444'))
         table.setItem(row, 2, score_item)
-        table.setItem(row, 3, _cell(log.get('camera_id') or '-'))
 
 
 # ============ 보행 분포 막대 ============

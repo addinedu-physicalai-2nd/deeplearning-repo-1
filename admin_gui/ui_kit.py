@@ -117,7 +117,8 @@ def build_patient_card(patient):
     layout.setSpacing(2)
 
     age = getattr(patient, 'age', None)
-    top_text = f"{patient.name} · {age}세" if age is not None else patient.name
+    room = getattr(patient, 'room', '') or ''
+    top_text = f"{patient.name} · {age}세 · {room}  " if age is not None else patient.name
     top = QLabel(top_text)
     top.setStyleSheet("font-size:13px; font-weight:600; color:#111827; border:none; background:transparent;")
     layout.addWidget(top)
