@@ -21,7 +21,7 @@ antalgic/abnormal)은 ai_server/models/의 모델 파일명(model_*.pth)에서
 """
 from . import db_client
 from .drawing import fit_to_view, to_pixmap
-from config.settings import CAMERA_PORTS
+from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
     Qt, QColor, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPainter, QPen, QPushButton, QRectF, QVBoxLayout, QWidget,
@@ -107,7 +107,8 @@ class GaitTab(QWidget):
         camera_title.setFont(QFont('', -1, QFont.Weight.Bold))
         left.addWidget(camera_title)
         self.camera_combo = QComboBox()
-        self.camera_combo.addItems(list(CAMERA_PORTS))
+        # 역할이 'gait'인 카메라만 (settings.CAMERA_ROLES)
+        self.camera_combo.addItems([c for c in CAMERA_PORTS if CAMERA_ROLES.get(c) == 'gait'])
         left.addWidget(self.camera_combo)
 
         patient_title = QLabel("환자 선택")

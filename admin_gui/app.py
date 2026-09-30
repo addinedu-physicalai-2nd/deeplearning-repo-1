@@ -256,6 +256,7 @@ class AdminWindow(QMainWindow):
                 return
             if cmd == 'get_patients':
                 patients = db_client.to_patients(msg.get('data') or [])
+                self.fall_tab.set_patients(patients)
                 self.gait_tab.set_patients(patients)
                 self.stretch_tab.set_patients(patients)
                 print(f"[GUI] 환자 {len(patients)}명 로드")

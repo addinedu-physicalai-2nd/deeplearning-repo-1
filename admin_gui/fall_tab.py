@@ -1,11 +1,11 @@
 # admin_gui/fall_tab.py
 """낙상 탭 — 목업(gui_mockup_v5.html)의 낙상 탭 동작 + 스타일을 그대로 구현.
 
-카메라 2대(CAM-01=101호, CAM-02=102호) 고정. 상태에 따라 카드 테두리 색이
+settings.CAMERA_ROLES가 'fall'인 카메라(침대 카메라)만 표시. 상태에 따라 카드 테두리 색이
 바뀌고(정상=연회색, 주의=주황, 낙상=빨강), 낙상/주의 이벤트가 발생하면 화면
 우측에 알림 카드가 쌓인다. 낙상(빨강) 카드를 클릭하면 팝업이 뜬다. 카메라(=
-침상)는 환자와 1:1로 고정 매칭되어 있으므로 환자명은 이미 알고 있는 값을
-그대로 보여주고, 요양보호사명만 입력하면 "처리 완료" 버튼이 활성화된다.
+침상)는 환자와 1:1로 고정 매칭되어 있으므로(settings.CAMERA_PATIENTS) 환자명은
+main_server 환자 목록(get_patients)의 camera_id로 채워서 보여주고, 요양보호사명만 입력하면 "처리 완료" 버튼이 활성화된다.
 주의(주황) 카드는 클릭하면 바로 닫힌다(목업과 동일).
 
 처리 완료는 db_client.resolve_fall()로 main_server에 요청한다 — 서버가 그
@@ -24,15 +24,20 @@ import time
 
 from . import db_client
 from .drawing import draw_camera_overlay, fit_to_view, to_pixmap
+from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
     Qt, QColor, QFont, QDialog, QFormLayout, QFrame, QGraphicsDropShadowEffect,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QVBoxLayout, QWidget, pyqtSignal,
 )
 
-# 카메라(=침상) ↔ 환자 1:1 고정 매칭.
-# TODO(DB 연동 담당자): 더미값 — 실제 병상-환자 배정 테이블 조회로 교체 필요.
-FALL_CAMERAS = [('CAM-01', '101호', '김철수'), ('CAM-02', '102호', '홍길동')]
+# 침대 카메라 → 병실 표시명 (화면 표시용). 여기 없으면 camera_id를 그대로 표시
+FALL_ROOM_LABELS = {'CAM-01': '101호', 'CAM-02': '102호'}
+
+# 낙상 탭에 표시할 카메라: settings.CAMERA_ROLES가 'fall'인 것만.
+# 환자명은 처음엔 '-' → main_server 환자 목록이 도착하면 set_patients()가 채운다
+FALL_CAMERAS = [(cam_id, FALL_ROOM_LABELS.get(cam_id, cam_id), '-')
+                for cam_id in CAMERA_PORTS if CAMERA_ROLES.get(cam_id) == 'fall']
 
 STATE_BORDER = {'normal': '#e5e7eb', 'checking': '#f59e0b', 'alert': '#ef4444'}
 STATE_BADGE_TEXT = {'normal': '정상', 'checking': '확인 필요', 'alert': '낙상 감지'}
@@ -272,6 +277,14 @@ class FallTab(QWidget):
 
         outer.addLayout(content)
 
+    def set_patients(self, patients):
+        """main_server에서 환자 목록이 도착하면 app.py가 호출 — Patient.camera_id(낙상 카메라 배정)로 환자명 갱신"""
+        for p in patients:
+            if p.camera_id in self._camera_lookup:
+                room_label, _ = self._camera_lookup[p.camera_id]
+                self._camera_lookup[p.camera_id] = (room_label, p.name)
+                self.boxes[p.camera_id].patient_name = p.name
+
     def render(self, camera_id, msg, frame):
         """result_receiver가 mode 0 메시지를 줄 때마다 admin_gui.py의 dispatch()가 호출"""
         box = self.boxes.get(camera_id)
@@ -318,6 +331,8 @@ class FallTab(QWidget):
         self.notif_stack.insertWidget(0, card)
 
     def _handle_urgent_click(self, camera_id, room_label, patient_name, track_id, card):
+        # 알림이 환자 목록 도착 전에 떴을 수 있으니, 클릭 시점의 최신 환자명으로 보여준다
+        patient_name = self._camera_lookup.get(camera_id, (room_label, patient_name))[1]
         dialog = ResolveFallDialog(room_label, patient_name, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             patient_name, caregiver_name = dialog.values()

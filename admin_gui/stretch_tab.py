@@ -38,7 +38,7 @@ import cv2
 
 from .drawing import (LEVEL_COLOR, UNKNOWN_COLOR, draw_session_result, draw_skeleton,
                        draw_stretch_badge, fit_to_view, load_reference, to_pixmap)
-from config.settings import CAMERA_PORTS
+from config.settings import CAMERA_PORTS, CAMERA_ROLES
 from .qt_compat import (
     Qt, QComboBox, QFont, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QPushButton, QTimer, QVBoxLayout, QWidget,
@@ -165,12 +165,13 @@ class StretchingTab(QWidget):
         # 좌측: 환자(카메라) 검색 + 선택 — 보행 탭과 동일한 사이드바 구성
         left = QVBoxLayout()
         left.setSpacing(8)
-        # 스트레칭은 공용 카메라에서 측정 → 환자와 카메라를 따로 고른다 (환자는 전체 목록)
+        # 스트레칭은 전용 측정 카메라에서 측정 → 환자와 카메라를 따로 고른다 (환자는 전체 목록)
         camera_title = QLabel("측정 카메라")
         camera_title.setFont(QFont('', -1, QFont.Weight.Bold))
         left.addWidget(camera_title)
         self.camera_combo = QComboBox()
-        self.camera_combo.addItems(list(CAMERA_PORTS))
+        # 역할이 'stretch'인 카메라만 (settings.CAMERA_ROLES)
+        self.camera_combo.addItems([c for c in CAMERA_PORTS if CAMERA_ROLES.get(c) == 'stretch'])
         left.addWidget(self.camera_combo)
 
         left_title = QLabel("환자 선택")
