@@ -32,12 +32,8 @@ antalgic/abnormal)은 ai_server/models/의 모델 파일명(model_*.pth)에서
   - 상단 카메라 영역/하단 결과 영역, 좌측 사이드바의 "측정 카메라"/"환자 선택"도
     낙상 탭의 메시지 알림 패널과 같은 회색 섹션으로 나눴다.
   - 환자 선택 목록은 DB에서 가져온 결과가 카드처럼 쌓이는 느낌을 주려고
-    카드형 항목(이름 굵게 위 / 병실·ID 회색 아래)으로 바꾸고, 선택 시 파란
+    카드형 항목("이름 · 나이 · 호실" 한 줄)으로 바꾸고, 선택 시 파란
     테두리로 강조된다(ui_kit.build_patient_card/style_selectable_list).
-    환자 카드 목록을 채우는 로직은 스트레칭 탭과 공유(ui_kit.populate_patient_list)
-    — 예전엔 각 탭에 따로 있었는데, sizeHint 계산 순서가 잘못돼 있어서 카드
-    글자가 깨져(다음 줄과 겹쳐) 보이는 버그가 있었다. 공용 함수로 합치면서 같이
-    고쳤다(ui_kit.py의 populate_patient_list 주석 참고).
 """
 from . import db_client
 from .drawing import fit_to_view, to_pixmap
@@ -151,7 +147,7 @@ class GaitTab(QWidget):
         patient_content.addWidget(self.search_input)
 
         # DB에서 가져온 환자들이 메시지 알림 카드처럼 하나씩 쌓이는 느낌을
-        # 주기 위해, 각 항목을 카드형 위젯(이름 굵게 위 / 병실·ID 회색 아래)으로
+        # 주기 위해, 각 항목을 카드형 위젯("이름 · 나이 · 호실" 한 줄)으로
         # 만들어 끼워 넣고, 선택 시 파란 테두리로 강조되는 스타일을 준다.
         self.patient_list = QListWidget()
         style_selectable_list(self.patient_list)
