@@ -100,35 +100,35 @@ def style_selectable_list(list_widget, spacing=6):
 
 
 def build_patient_card(patient):
-    """환자 선택 목록의 카드형 항목 위젯 — "이름 · 나이 · 호실"을 한 줄로만
-    보여준다(예: "김철수 · 84세 · 301호"). QListWidgetItem.setSizeHint()와
+    """환자 선택 목록의 카드형 항목 위젯 — 이름(+나이가 있으면 같이) 굵게 위,
+    병실·환자ID 옅은 회색으로 아래. QListWidgetItem.setSizeHint()와
     QListWidget.setItemWidget()으로 항목에 끼워 넣어서 쓴다.
 
-    원래는 이름/나이를 굵게 위 줄에, 병실·환자ID를 옅은 회색으로 아래 줄에
-    나눠서 보여줬는데, 환자ID는 화면에 보여줄 필요가 없고 두 줄일 필요도
-    없다는 피드백에 따라 한 줄로 합쳤다(환자ID는 item의 데이터로는 여전히
-    들어있고 화면 표시에서만 뺐다).
-
     age 필드는 db_client.Patient에 아직 없을 수 있어(확인 전) getattr로 안전하게
-    조회한다 — 있으면 "나이세"를 끼워 넣고, 없으면 건너뛴다. room도 없으면
-    마찬가지로 건너뛴다."""
+    조회한다 — 있으면 "이름 · 나이세"로, 없으면 이름만 보여준다."""
     widget = QWidget()
     widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     widget.setStyleSheet("background:transparent;")
+    # 아래쪽 줄이 없는(sub_text 빈) 카드도 최소 높이를 보장 — populate_patient_list()의
+    # sizeHint 계산과 맞물려 행 높이가 들쭉날쭉해지는 것을 막는다.
+    widget.setMinimumHeight(36)
     layout = QVBoxLayout(widget)
     layout.setContentsMargins(2, 0, 2, 0)
-    layout.setSpacing(0)
+    layout.setSpacing(2)
 
     age = getattr(patient, 'age', None)
+    top_text = f"{patient.name} · {age}세" if age is not None else patient.name
+    top = QLabel(top_text)
+    top.setStyleSheet("font-size:13px; font-weight:600; color:#111827; border:none; background:transparent;")
+    layout.addWidget(top)
+
     room = getattr(patient, 'room', '') or ''
-    parts = [patient.name]
-    if age is not None:
-        parts.append(f"{age}세")
-    if room:
-        parts.append(room)
-    label = QLabel(' · '.join(parts))
-    label.setStyleSheet("font-size:13px; font-weight:600; color:#111827; border:none; background:transparent;")
-    layout.addWidget(label)
+    pid = getattr(patient, 'patient_id', '') or ''
+    sub_text = ' · '.join(str(v) for v in (room, pid) if v)
+    if sub_text:
+        bottom = QLabel(sub_text)
+        bottom.setStyleSheet("font-size:11px; color:#9ca3af; border:none; background:transparent;")
+        layout.addWidget(bottom)
 
     return widget
 
