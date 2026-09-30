@@ -111,7 +111,7 @@ def build_patient_card(patient):
     widget.setStyleSheet("background:transparent;")
     # 아래쪽 줄이 없는(sub_text 빈) 카드도 최소 높이를 보장 — populate_patient_list()의
     # sizeHint 계산과 맞물려 행 높이가 들쭉날쭉해지는 것을 막는다.
-    widget.setMinimumHeight(36)
+    widget.setMinimumHeight(24)
     layout = QVBoxLayout(widget)
     layout.setContentsMargins(2, 0, 2, 0)
     layout.setSpacing(2)
@@ -153,4 +153,6 @@ def populate_patient_list(list_widget, patients):
         card = build_patient_card(p)
         list_widget.addItem(item)
         list_widget.setItemWidget(item, card)
-        item.setSizeHint(card.sizeHint())
+        hint = card.sizeHint().expandedTo(card.minimumSize())
+        hint.setHeight(hint.height() + 16)
+        item.setSizeHint(hint)
