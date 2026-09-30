@@ -80,6 +80,14 @@ class GaitAnalyzerSession:
         # 🔥 추가: 개별 인원(track_id)의 누적 확률을 기록할 딕셔너리 추가
         self.history_probs = {}
 
+    def reset(self):
+        """측정 세션 초기화 — 30프레임 버퍼와 누적 확률을 전부 비운다.
+        보행 모드로 들어오거나 나갈 때 AIManager.set_mode()가 호출한다.
+        (안 비우면 이전 측정의 프레임이 버퍼에 남아서, 다시 시작하자마자
+        새 프레임 1장만으로 판단이 나오고 누적 점수도 이전 측정에 이어서 쌓인다)"""
+        self.sequence_buffers.clear()
+        self.history_probs.clear()
+
     def process_keypoints(self, keypoints_dict: dict, bbox_dict: dict) -> List[RawDetection]:
         detections = []
         

@@ -6,6 +6,7 @@
     python -m hardware.image_sender --camera CAM-01 --source 0        # 1대만
     python -m hardware.image_sender --camera CAM-01 CAM-02 --source 0 video.mp4
 카메라마다 스레드 1개가 읽기 → 인코딩 → 전송을 따로 돌린다 (한 대가 느려도 다른 카메라는 영향 없음).
+FPS는 실행 인자가 아니라 config/settings.py의 CAMERA_FPS(카메라별)로 정한다.
 """
 import argparse
 import socket
@@ -14,7 +15,7 @@ import time
 
 import cv2
 
-from config.settings import CAMERA_PORTS
+from config.settings import CAMERA_FPS, CAMERA_PORTS, DEFAULT_CAMERA_FPS
 
 MAX_JPEG_BYTES = 48000    # Main이 base64(+33%)로 AI에 넘겨도 UDP 한 패킷(65507)에 들어가는 크기
 MAX_READ_FAILS = 30       # 웹캠 연속 읽기 실패 허용 횟수
@@ -36,6 +37,11 @@ def encode_jpeg(frame, quality):
     return None
 
 
+def camera_fps(camera_id):
+    """카메라별 송신 FPS (settings.CAMERA_FPS, 없으면 DEFAULT_CAMERA_FPS)"""
+    return float(CAMERA_FPS.get(camera_id, DEFAULT_CAMERA_FPS))
+
+
 def open_capture(camera_id, source, args):
     """웹캠/영상 열기. 실패하면 None"""
     capture = cv2.VideoCapture(source)
@@ -50,7 +56,7 @@ def open_capture(camera_id, source, args):
         capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-        capture.set(cv2.CAP_PROP_FPS, args.fps)
+        capture.set(cv2.CAP_PROP_FPS, camera_fps(camera_id))
 
         fourcc = int(capture.get(cv2.CAP_PROP_FOURCC)).to_bytes(4, 'little').decode(errors='replace')
         print(f"[{camera_id}] camera format: {fourcc} {int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
@@ -63,12 +69,13 @@ def send_loop(camera_id, source, capture, args, stop_event):
     is_file = isinstance(source, str)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     target = (args.host, CAMERA_PORTS[camera_id])
-    interval = 1.0 / args.fps
+    fps = camera_fps(camera_id)
+    interval = 1.0 / fps
 
     sent = 0
     fails = 0
     last_log = time.monotonic()
-    print(f"[{camera_id}] source={source} -> udp://{target[0]}:{target[1]} @ {args.fps} FPS")
+    print(f"[{camera_id}] source={source} -> udp://{target[0]}:{target[1]} @ {fps:g} FPS")
 
     try:
         while not stop_event.is_set():
@@ -100,7 +107,8 @@ def send_loop(camera_id, source, capture, args, stop_event):
 
             now = time.monotonic()
             if now - last_log >= LOG_INTERVAL_SEC:
-                print(f"[{camera_id}] sent {sent} frames in last {LOG_INTERVAL_SEC:.0f}s")
+                print(f"[{camera_id}] sent {sent} frames in last {LOG_INTERVAL_SEC:.0f}s "
+                      f"(목표 {fps * LOG_INTERVAL_SEC:.0f})")
                 sent = 0
                 last_log = now
 
@@ -117,7 +125,6 @@ def main():
     parser.add_argument('--source', nargs='+', default=DEFAULT_SOURCES,
                         help='웹캠 번호 또는 영상 파일 경로들 (--camera와 같은 개수)')
     parser.add_argument('--host', default='127.0.0.1', help='Main Service IP')
-    parser.add_argument('--fps', type=float, default=15.0)
     parser.add_argument('--width', type=int, default=640)
     parser.add_argument('--height', type=int, default=480)
     parser.add_argument('--quality', type=int, default=80)

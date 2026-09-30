@@ -429,6 +429,7 @@ class AdminWindow(QMainWindow):
         self._layout_fall_toasts()
 
     def closeEvent(self, event):
+        self.gait_tab.reset_analysis()      # 분석 중에 창을 닫아도 카메라를 mode=0으로 되돌림
         self.stop_event.set()
         self.stretch_tab.stop()
         super().closeEvent(event)

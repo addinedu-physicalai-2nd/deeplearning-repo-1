@@ -3,8 +3,14 @@
 
 "보행 분석 시작" 누르기 전에는 결과 없음(빈 상태) → 시작을 누르면
 main_server에 mode=1로 전환 명령을 보내고, 이후 들어오는 결과의
-cumulative_scores를 도넛 차트로 그린다. "중지"를 누르면 분석만 멈추고
+cumulative_scores를 도넛 차트로 그린다. "중지"를 누르면 분석을 멈추고
 마지막 결과는 화면에 남겨둔다(목업 v2와 동일). "저장"은 db_client에 위임.
+
+분석이 멈추는 모든 경우(중지 버튼, 다른 환자 선택, 다른 탭으로 이동, 창 닫기)에
+_release_camera()로 카메라를 mode=0으로 되돌리고 영상 칸을 검정 화면으로 비운다.
+AI 쪽은 보행 모드를 벗어날 때/다시 들어올 때 30프레임 버퍼와 누적 점수를
+초기화하므로(ai_manager.set_mode → GaitAnalyzerSession.reset), 다음 측정은 항상
+빈 버퍼에서 30프레임을 새로 모은 뒤 판단한다.
 
 환자 목록은 이제 로컬 더미(patients.py, 삭제됨)가 아니라 main_server가
 db_client.request_patients() 응답으로 주는 실제 목록이다 — app.py의
@@ -62,6 +68,10 @@ VIEW_W, VIEW_H = 720, 540
 # dataviz 스킬 validate_palette.js로 light/dark 모두 통과 확인된 8색 팔레트 중 앞 6개
 SERIES_COLORS_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300']
 SERIES_COLORS_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300']
+
+# 결과 칸 안내 문구 — 시작 전 / 시작 후 첫 판단(AI 30프레임 수집) 전
+EMPTY_TEXT_IDLE = "보행 분석을 시작하면 결과가 표시됩니다"
+EMPTY_TEXT_COLLECTING = "측정 중… 걸음 데이터를 모으고 있습니다 (약 2초)"
 
 # 분석 상태 뱃지 색 — "분석 중"은 낙상 탭의 "정상" 뱃지와 같은 초록으로 통일.
 STATUS_BADGE_BG = {'분석 중': '#2f9e44', '중지됨': '#9ca3af'}
@@ -124,6 +134,9 @@ class GaitTab(QWidget):
         # set_mode/save_gait_session에 실제로 쓰는 카메라 — Patient.camera_id(낙상
         # 카메라)와는 별개로, 여기서 직접 고른 값. 분석을 시작할 때 확정된다.
         self.active_camera_id = None
+        # 실제로 mode=1(보행)로 전환해 둔 카메라. 분석이 멈출 때 이 카메라를 mode=0으로
+        # 되돌려야 AI 쪽 보행 버퍼가 초기화된다 (_release_camera 참고)
+        self.gait_camera_id = None
 
         root = QHBoxLayout(self)
         # 스트레칭 탭과 똑같은 바깥 여백/간격 — 예전엔 이 값이 없어서 탭을 오갈 때
@@ -193,7 +206,7 @@ class GaitTab(QWidget):
         right.addWidget(camera_panel)
 
         result_panel, result_content, _ = make_section_panel()
-        self.empty_label = QLabel("보행 분석을 시작하면 결과가 표시됩니다")
+        self.empty_label = QLabel(EMPTY_TEXT_IDLE)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("color:#888; padding:24px; border:none;")
         result_content.addWidget(self.empty_label)
@@ -291,8 +304,9 @@ class GaitTab(QWidget):
         self.selected = item.data(Qt.ItemDataRole.UserRole)
         self.name_label.setText(f"{self.selected.name} · {self.selected.room}")
         self.analyzing = False
-        # 환자를 새로 고르면 이전 측정의 화면 갱신을 멈춘다 — "측정 카메라"를 다시
+        # 환자를 새로 고르면 이전 측정을 멈춘다 — "측정 카메라"를 다시
         # 골라서 "보행 분석 시작"을 눌러야 새 active_camera_id가 잡힌다.
+        self._release_camera()
         self.active_camera_id = None
         self.toggle_btn.setText("보행 분석 시작")
         self.toggle_btn.setEnabled(True)
@@ -312,6 +326,7 @@ class GaitTab(QWidget):
         self.result_title.hide()
         self.donut.hide()
         self.legend_widget.hide()
+        self.empty_label.setText(EMPTY_TEXT_IDLE)
         self.empty_label.show()
 
     def reset_analysis(self):
@@ -327,8 +342,8 @@ class GaitTab(QWidget):
         if not self.analyzing and self.active_camera_id is None:
             return   # 이미 초기 상태 — 할 일 없음
         self.analyzing = False
+        self._release_camera()
         self.active_camera_id = None
-        self.video_label.clear()
         if self.selected is not None:
             self.toggle_btn.setText("보행 분석 시작")
             self.toggle_btn.setEnabled(True)
@@ -346,13 +361,33 @@ class GaitTab(QWidget):
             # "측정 카메라"로 실제 분석을 시작한다.
             self.active_camera_id = self.camera_combo.currentText()
             self.toggle_btn.setText("분석 중지")
+            # 이전 측정 결과(도넛/범례)를 지우고, 첫 판단이 올 때까지 수집 중 안내를 띄운다.
+            # AI는 보행 모드로 들어올 때 버퍼를 비우고 30프레임을 새로 모은 뒤 첫 결과를
+            # 보내므로(ai_manager.set_mode), 그 사이 이전 결과가 남아 있으면 바로 결과가
+            # 나온 것처럼 보인다. _show_empty_state()가 뱃지도 비우므로 뱃지보다 먼저 호출.
+            self._show_empty_state()
+            self.empty_label.setText(EMPTY_TEXT_COLLECTING)
+            self.save_btn.setEnabled(False)
             self._set_status_badge("분석 중")
             self.link.send({"cmd": "set_mode", "camera_id": self.active_camera_id, "mode": 1})
+            self.gait_camera_id = self.active_camera_id
         else:
             self.toggle_btn.setText("보행 분석 시작")
             self._set_status_badge("중지됨")
-            # 마지막 결과는 화면에 남겨둠 (목업과 동일) — active_camera_id를
-            # 그대로 둬서 show_frame이 계속 그 카메라의 프레임을 그린다.
+            # 마지막 결과(도넛/범례)는 화면에 남겨둠 (목업과 동일). active_camera_id도
+            # 저장 시 카메라 번호로 쓰므로 그대로 두고, 카메라만 놓아준다.
+            self._release_camera()
+            if self.empty_label.isVisibleTo(self):
+                # 첫 결과가 오기 전에 중지 → "측정 중" 안내를 시작 전 문구로 되돌림
+                self.empty_label.setText(EMPTY_TEXT_IDLE)
+
+    def _release_camera(self):
+        """분석이 멈출 때 공통 처리: mode=1로 바꿔 둔 카메라를 mode=0으로 되돌리고
+        (→ AI가 보행 버퍼/누적 점수 초기화) 영상 칸을 검정 화면으로 비운다."""
+        if self.gait_camera_id is not None:
+            self.link.send({"cmd": "set_mode", "camera_id": self.gait_camera_id, "mode": 0})
+            self.gait_camera_id = None
+        self.video_label.clear()     # 배경색(#111)만 남음 = 검정 화면
 
     def _save_session(self):
         if self.selected is None or not self.donut.scores:
@@ -363,7 +398,8 @@ class GaitTab(QWidget):
         QTimer.singleShot(1500, lambda: self.save_btn.setText("저장"))
 
     def show_frame(self, camera_id, frame_bgr):
-        if self.active_camera_id is None or camera_id != self.active_camera_id:
+        # 분석 중일 때만 영상을 그린다 — 중지 후엔 검정 화면 유지
+        if not self.analyzing or self.active_camera_id is None or camera_id != self.active_camera_id:
             return
         self.video_label.setPixmap(to_pixmap(fit_to_view(frame_bgr, VIEW_W, VIEW_H)))
 

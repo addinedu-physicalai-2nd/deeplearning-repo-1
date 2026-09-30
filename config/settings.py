@@ -27,6 +27,18 @@ CAMERA_ROLES = {
     'CAM-04': 'stretch',
 }
 
+# ============ 카메라별 송신 FPS (hardware/image_sender.py가 사용) ============
+# 보행/낙상 LSTM은 "프레임 수" 기준(보행 30프레임, 낙상 16프레임)이라 FPS가 바뀌면
+# 모델이 보는 시간 길이가 달라진다 — 학습 영상 FPS에 맞춰서 카메라별로 정한다.
+# 여기 없는 카메라는 DEFAULT_CAMERA_FPS
+DEFAULT_CAMERA_FPS = 15
+CAMERA_FPS = {
+    'CAM-01': 15,
+    'CAM-02': 15,
+    'CAM-03': 30,   # 보행 측정
+    'CAM-04': 15,
+}
+
 AI_SERVER_PORT = 9100
 GUI_VIDEO_PORT = 9998
 
