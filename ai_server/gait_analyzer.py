@@ -55,6 +55,28 @@ def load_models(device=None):
         
     return models_dict, device
 
+def combine_scores(raw_probs: dict) -> dict:
+    """모델 6개의 확률 → 합이 1인 질환별 비율 (2단계 방식)
+
+    모델들은 "이 질환이냐 아니냐"를 각자 따로 학습한 이진 분류기라, 확률을 그냥 더해서
+    나누면 질환 모델들이 애매하게(0.3~0.5) 답할 때 정상 몫이 희석된다
+    (예: 정상 0.9 / 나머지 각 0.4 → 정상 31%).
+    그래서 1단계로 정상 모델의 확률을 정상 비율로 그대로 쓰고,
+    2단계로 나머지(1 - 정상)를 질환 모델 5개의 확률 비율대로 나눈다.
+      예: 정상 0.9 / 나머지 각 0.4 → 정상 90%, 질환 각 2%
+    질환 모델 확률이 모두 0이면 나머지를 똑같이 나눈다.
+    """
+    normal = min(max(raw_probs.get('normal', 0.0), 0.0), 1.0)
+    diseases = [d for d in TARGET_DISEASES if d != 'normal']
+    disease_total = sum(raw_probs.get(d, 0.0) for d in diseases)
+    rest = 1.0 - normal
+
+    scores = {'normal': round(normal, 3)}
+    for d in diseases:
+        share = raw_probs.get(d, 0.0) / disease_total if disease_total > 0 else 1.0 / len(diseases)
+        scores[d] = round(rest * share, 3)
+    return scores
+
 def normalize(kpts: np.ndarray) -> np.ndarray:
     pelvis = (kpts[11] + kpts[12]) / 2.0
     centered_kpts = kpts - pelvis
@@ -122,14 +144,10 @@ class GaitAnalyzerSession:
                         prob = F.softmax(outputs, dim=1)[0][1].item()
                         raw_probs[disease_name] = prob
                 
-                total_prob = sum(raw_probs.values())
-                realtime_scores = {}
+                # 실시간 비율 계산 (정상 모델 우선 2단계 방식 — combine_scores 참고) 및 누적 데이터 갱신
+                realtime_scores = combine_scores(raw_probs)
                 cumulative_scores = {}
-                
-                # 실시간 확률 계산 및 누적 데이터 갱신
-                for d_name, prob in raw_probs.items():
-                    score = round(prob / total_prob, 3) if total_prob > 0 else 0.0
-                    realtime_scores[d_name] = score
+                for d_name, score in realtime_scores.items():
                     self.history_probs[track_id][d_name].append(score)
                 
                 # 누적 평균 확률 산출
