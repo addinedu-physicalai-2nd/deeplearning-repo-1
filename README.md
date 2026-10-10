@@ -6,7 +6,7 @@
 AI Deep Learning 기술을 이용한 요양원 관리 시스템
 
 
-[![발표자료](https://docs.google.com/presentation/d/178kyw-LluLt_m8xJG-UwvEeJahqwHwas/edit?slide=id.p1#slide=id.p1)]
+[[발표자료](https://docs.google.com/presentation/d/178kyw-LluLt_m8xJG-UwvEeJahqwHwas/edit?slide=id.p1#slide=id.p1)]
 
 # 📚 목차
 
@@ -33,7 +33,7 @@ AI Deep Learning 기술을 이용한 요양원 관리 시스템
 | 스트레칭 · 재활 피드백 | CAM-04 | YOLO Pose + 기준 자세 비교 (규칙 기반 점수) |
 
 
-# 3. 기술 스택
+# 2. 기술 스택
 
 | 구분 | 사용 기술 |
 |---|---|
@@ -116,6 +116,7 @@ deeplearning-repo-1/
 
 - AI가 프레임마다 LSTM 낙상 확률을 계산하고, Main이 최근 **1.5초 중 70% 이상**이 낙상 프레임이면 낙상으로 확정합니다.
 - 주의(주황) → 낙상(빨강)으로 카드 테두리와 알림이 바뀌고, 보호사가 이름을 입력해 처리 완료하면 DB에 기록됩니다.
+- 다른 화면을 표기하고 있어도 낙상이 감지되면 알림이 뜨고, 알림을 클릭하면 낙상 탭으로 이동합니다. 
 
 ## 보행 패턴 이상 진단
 
